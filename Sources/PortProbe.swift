@@ -31,6 +31,9 @@ enum PortProbe {
     }
 
     /// Attempt a non-blocking, time-bounded connect to a single resolved address.
+    /// Uses poll() rather than select()/fd_set — select's fd_set is a fixed 1024-bit
+    /// bitmap, and indexing it with a file descriptor >= 1024 (which a long-running
+    /// process with many open fds can hit) is out of bounds and crashes.
     private static func connects(to info: addrinfo, timeout: TimeInterval) -> Bool {
         let fd = socket(info.ai_family, info.ai_socktype, info.ai_protocol)
         guard fd >= 0 else { return false }
@@ -43,33 +46,16 @@ enum PortProbe {
         if rc == 0 { return true }                 // connected immediately
         if errno != EINPROGRESS { return false }
 
-        // Wait for writability (connect completion) up to timeout.
-        var writeSet = fd_set()
-        fdZero(&writeSet)
-        fdSet(fd, &writeSet)
-        var tv = timeval(tv_sec: Int(timeout), tv_usec: Int32((timeout - floor(timeout)) * 1_000_000))
-        guard select(fd + 1, nil, &writeSet, nil, &tv) > 0 else { return false }
+        // Wait for the connect to complete (socket becomes writable) up to timeout.
+        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        let ms = Int32(timeout * 1000)
+        let ready = withUnsafeMutablePointer(to: &pfd) { poll($0, 1, ms) }
+        guard ready > 0, (pfd.revents & Int16(POLLOUT)) != 0 else { return false }
 
-        // Confirm there was no socket error.
+        // Confirm there was no socket error on the completed connect.
         var soError: Int32 = 0
         var len = socklen_t(MemoryLayout<Int32>.size)
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &len)
         return soError == 0
-    }
-}
-
-// fd_set helpers (Swift can't index the C bitfield directly).
-private func fdZero(_ set: inout fd_set) {
-    set.fds_bits = (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
-}
-
-private func fdSet(_ fd: Int32, _ set: inout fd_set) {
-    let intOffset = Int(fd) / 32
-    let bitOffset = Int(fd) % 32
-    let mask = Int32(1 << bitOffset)
-    withUnsafeMutablePointer(to: &set.fds_bits) { ptr in
-        ptr.withMemoryRebound(to: Int32.self, capacity: 32) { bits in
-            bits[intOffset] |= mask
-        }
     }
 }
