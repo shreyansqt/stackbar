@@ -1,30 +1,29 @@
 import SwiftUI
+import AppKit
 
 @main
 struct StackBarApp: App {
-    @StateObject private var manager = ServiceManager()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuBarView()
-                .environmentObject(manager)
-        } label: {
-            Image(systemName: manager.overallStatus.menuBarSymbol)
-        }
-        .menuBarExtraStyle(.window)
+        // The entire UI — the menu bar item AND the settings/logs windows — is
+        // managed natively by MenuBarController (NSStatusItem + NSMenu + NSWindow)
+        // in the AppDelegate. We expose no SwiftUI scenes; a menu-bar-only app
+        // has no main window, and SwiftUI window scenes mount lazily, which made
+        // the menu's open requests unreliable. WindowManager hosts the SwiftUI
+        // views in plain NSWindows instead.
+        Settings { EmptyView() }
+    }
+}
 
-        // Settings / edit-services window. Opened via openWindow(id:).
-        Window("Services", id: "settings") {
-            SettingsView()
-                .environmentObject(manager)
-        }
-        .windowResizability(.contentSize)
+/// Owns the model + the native menu controller for the app's lifetime.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let manager = ServiceManager()
+    private var menuController: MenuBarController?
 
-        // Per-service log window, addressed by service UUID string.
-        WindowGroup("Logs", id: "logs", for: UUID.self) { $serviceID in
-            LogWindowView(serviceID: serviceID)
-                .environmentObject(manager)
-        }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        menuController = MenuBarController(manager: manager)
     }
 }
 

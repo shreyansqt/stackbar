@@ -77,7 +77,9 @@ final class ControlServer {
         guard req.bearerToken == token else {
             return .json(["error": "unauthorized"], status: 401)
         }
-        let parts = req.path.split(separator: "/").map(String.init)
+        // Percent-decode each path component so service names with spaces or
+        // punctuation (e.g. "smarta%20banking") resolve correctly.
+        let parts = req.path.split(separator: "/").map { String($0).removingPercentEncoding ?? String($0) }
         let m = req.method
 
         // Collection routes.

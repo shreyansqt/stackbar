@@ -97,6 +97,17 @@ enum ServiceStatus: Equatable {
         case .crashed(let code): return "crashed(\(code))"
         }
     }
+
+    /// Compact hint shown at rest in the menu row (no exit code noise).
+    var shortLabel: String {
+        switch self {
+        case .idle: return ""
+        case .starting: return "starting…"
+        case .running: return "running"
+        case .stopping: return "stopping…"
+        case .crashed: return "crashed"
+        }
+    }
 }
 
 enum StatusColor {
