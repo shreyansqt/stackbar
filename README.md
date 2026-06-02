@@ -1,43 +1,69 @@
 # StackBar
 
 A lightweight native macOS menu bar app for running and monitoring your local dev
-services — start/stop/restart each process, see at a glance whether it's healthy
-(process alive + TCP port open), and read its logs. Built in Swift with AppKit
-(`NSStatusItem` + `NSMenu`) and SwiftUI, no Dock icon (`LSUIElement`).
+services — start/stop each process, see at a glance how healthy your stack is, and
+read each command's logs. Built in Swift with AppKit (`NSStatusItem` + `NSMenu`)
+and SwiftUI; menu-bar-only, no Dock icon (`LSUIElement`).
 
-Ships with a CLI and an MCP server so Claude Code sessions (or any terminal) can
-control services and read their logs on demand.
+Services are configured by `.stackbar.json` files that live **in your repos**, not
+in the app — point StackBar at a workspace folder and it discovers them. Ships with
+a `stackbar` CLI and an MCP server so any terminal or Claude Code session can drive
+services and read their logs.
 
 By [Shreyans Jain](https://shreyans.co) · hi@shreyans.co
 
-## Layout
+## How it works
 
+1. Each service has a **`.stackbar.json`** in its own folder (the folder is the
+   service's working directory).
+2. You add one or more **workspace folders** to StackBar (e.g. `~/work`).
+3. StackBar **recursively scans** each workspace for `.stackbar.json` files
+   (pruning `node_modules`, `.git`, `dist`, … and depth-capped) and lists those
+   services. "Refresh Services" re-scans on demand.
+
+### `.stackbar.json` format (JSONC — comments + trailing commas allowed)
+
+```jsonc
+{
+  // Name shown in the StackBar menu.
+  "name": "smarta-accounts",
+  // Command(s) to start the service, run in order, each as its own process.
+  "commands": ["pnpm dev"],
+  // Optional: command(s) run on Stop, after the start processes are terminated
+  // (e.g. a docker teardown). Run only after the start processes have exited.
+  "stopCommands": ["docker compose down"],
+  // Optional: TCP port to health-check (green when it accepts connections).
+  "port": 8790
+}
 ```
-StackBar/
-  project.yml              XcodeGen spec — source of truth for the Xcode project
-  Sources/                 Swift app
-    StackBarApp.swift       @main, MenuBarExtra + windows
-    Service.swift           service model + status enum
-    ServiceManager.swift    owns runners, persistence, 2s health timer
-    RunningService.swift    one process: spawn, log capture, status
-    LogStore.swift          on-disk log layout + file writer
-    PortProbe.swift         non-blocking TCP connect health check
-    MenuBarView.swift       the dropdown
-    SettingsView.swift      add/edit/delete services
-    LogWindowView.swift     live in-app log tail
-  tools/                   TypeScript CLI + MCP server (read-only log access)
-    src/store.ts            shared reader (mirrors LogStore layout)
-    src/cli.ts              `stackbar` CLI
-    src/mcp.ts              `stackbar-mcp` MCP server
-```
+
+One file = one service. A repo with several apps has one `.stackbar.json` per app
+folder. Keep these out of a shared repo with `.git/info/exclude` if the tool is
+personal.
+
+## The menu
+
+- **Menu bar glyph** reflects overall state: a stacked-layers icon whose brightness
+  scales with the fraction of services running (40%→100%), a **spinner** while
+  anything is starting/stopping, a **checkmark** flash when everything comes up, and
+  an **exclamation triangle** if something crashed.
+- **Each service** opens a submenu: a Start/Stop toggle, a **Status** section
+  (`Running on port 8791 · 4m`, plus Open in Browser), and **Start/Stop commands**
+  sections — each command opens its own isolated log (enabled once it has output).
+- Footer: **Start All / Stop All / Refresh Services / Workspaces… / Quit**.
+
+Logs render in a native `NSTextView` console with ANSI color (servers are launched
+with `FORCE_COLOR`), a line-number gutter, and ⌘F find.
 
 ## Data location
 
 Everything lives under `~/Library/Application Support/StackBar/`:
 
-- `services.json` — the service registry (name, dir, command, port)
-- `logs/<id>.log` — per-service log, keyed by service UUID (survives renames)
-- `logs/<id>.meta.json` — name/command/dir, so the CLI/MCP work without the app running
+- `workspaces.json` — the workspace folders you track
+- `logs/<id>.log` — combined per-service log (id is derived from the folder path)
+- `logs/<id>.<n>.log`, `logs/<id>.stop.<n>.log` — per start/stop-command logs
+- `stackbar.log` — StackBar's own diagnostic log (spawns, stop commands, errors)
+- `control.port` / `control.token` — the local control server's address + auth
 
 ## Build the app
 
@@ -59,38 +85,59 @@ open build/Build/Products/Debug/StackBar.app
 ## CLI + MCP tools
 
 ```sh
-cd tools
-npm install
-npm run build
+cd tools && npm install && npm run build
 ```
 
-### CLI
+The app runs a localhost-only HTTP control server (token-authed); the CLI and MCP
+are thin clients of it. Service **actions** need the app running; **log reads** work
+straight from the log files regardless.
+
+### CLI (`stackbar`)
 
 ```sh
-node dist/cli.js list                       # services + log status
-node dist/cli.js logs <service> [-n N] [-f] # tail N lines (default 200), -f to follow
-node dist/cli.js search <service> <pattern> # grep; --regex, --ignore-case
+stackbar list                          # services + live status
+stackbar start|stop|restart <svc|all>  # control a service (or all)
+stackbar rescan                        # re-scan workspaces for .stackbar.json
+stackbar workspaces                    # list workspace folders
+stackbar add-workspace <folder>        # track a folder
+stackbar logs <svc> [-n N] [-f] [--cmd N]   # tail logs (--cmd N = one command's log)
+stackbar search <svc> <pattern> [--regex] [--ignore-case]
 ```
 
-`<service>` matches by exact id, exact name, or partial name (case-insensitive).
+`<svc>` matches by exact id, exact name, or partial name (case-insensitive).
+`npm link` in `tools/` to put `stackbar` on your PATH.
 
 ### MCP server
 
-Register once at user scope so every Claude Code session can read logs:
+Register once at user scope so every Claude Code session can use it:
 
 ```sh
 claude mcp add stackbar --scope user -- node /absolute/path/to/tools/dist/mcp.js
 ```
 
-Tools exposed: `list_services`, `get_logs`, `search_logs`.
+Tools: `list_services`, `start_service`, `stop_service`, `restart_service`,
+`rescan_services`, `list_workspaces`, `add_workspace`, `get_logs`, `search_logs`.
 
 > Note: `tools/dist/` is gitignored. After cloning, run `npm install && npm run build`
 > in `tools/` before the CLI or MCP server will work.
 
+## Notable behaviors
+
+- **Process cleanup**: each spawned command runs in its own process group and is
+  tagged `STACKBAR_MANAGED`. On quit, all services are terminated; on launch, any
+  orphans left by a previous instance (which reparent to launchd) are swept, so
+  dev-server processes don't accumulate across relaunches.
+- **Container-safe**: the port-based kill backstop refuses to kill container
+  runtimes (OrbStack/Docker/containerd), so stopping a docker-backed service can't
+  wedge the daemon.
+- **Health**: a service is green when its process is alive and (if a port is set)
+  the port accepts connections — checked over both IPv4 and IPv6 (some dev servers
+  bind IPv6-only).
+
 ## Status
 
-V1. Health = process alive + TCP port check. Logs are captured to disk and shown
-live in-app. No dependency ordering between services yet (planned).
+Config lives in repo `.stackbar.json` files, discovered via workspace scanning.
+No dependency ordering between services yet.
 
 ## Author
 
