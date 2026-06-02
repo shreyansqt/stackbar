@@ -39,6 +39,16 @@ enum ServiceStatus: Equatable {
         case .crashed: return .red
         }
     }
+
+    /// Stable string for the control API / CLI.
+    var label: String {
+        switch self {
+        case .idle: return "idle"
+        case .starting: return "starting"
+        case .running: return "running"
+        case .crashed(let code): return "crashed(\(code))"
+        }
+    }
 }
 
 enum StatusColor {

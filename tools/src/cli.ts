@@ -1,12 +1,7 @@
 #!/usr/bin/env node
-import {
-  listServiceMeta,
-  resolveService,
-  readLogTail,
-  searchLog,
-  LOGS_DIR,
-} from "./store.js";
-import { createReadStream, existsSync, watch } from "node:fs";
+import { api, StackBarNotRunning } from "./client.js";
+import { resolveService, readLogTail, searchLog, LOGS_DIR } from "./store.js";
+import { createReadStream, existsSync, watch, statSync } from "node:fs";
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
@@ -25,6 +20,19 @@ async function main() {
     case "list":
     case "ls":
       return cmdList();
+    case "add":
+      return cmdAdd();
+    case "edit":
+      return cmdEdit();
+    case "remove":
+    case "rm":
+      return cmdRemove();
+    case "start":
+      return cmdAction("start");
+    case "stop":
+      return cmdAction("stop");
+    case "restart":
+      return cmdAction("restart");
     case "logs":
     case "log":
       return cmdLogs();
@@ -43,20 +51,97 @@ async function main() {
   }
 }
 
+const DOT: Record<string, string> = {
+  running: "🟢",
+  starting: "🟡",
+  idle: "⚪️",
+};
+
 async function cmdList() {
-  const meta = await listServiceMeta();
-  if (meta.length === 0) {
-    console.log("No services configured. Add some in the StackBar app.");
+  const services = await api.list();
+  if (services.length === 0) {
+    console.log("No services configured. Add one: stackbar add <name> --dir <path> --cmd <command>");
     return;
   }
-  for (const m of meta) {
-    const kb = (m.logSize / 1024).toFixed(1);
-    const when = m.lastModified ? new Date(m.lastModified).toLocaleString() : "never";
-    console.log(`${m.name}`);
-    console.log(`  cmd:  ${m.command}`);
-    console.log(`  dir:  ${m.directory}`);
-    console.log(`  log:  ${m.logExists ? `${kb} KB, updated ${when}` : "no log yet"}`);
+  for (const s of services) {
+    const dot = DOT[s.status] ?? "🔴";
+    const port = s.port ? ` :${s.port}` : "";
+    console.log(`${dot} ${s.name}${port}  (${s.status})`);
+    console.log(`     ${s.command}  [${s.directory}]`);
   }
+}
+
+async function cmdAdd() {
+  const name = args[1];
+  const dir = flag("dir", "d");
+  const command = flag("cmd", "c");
+  const portStr = flag("port", "p");
+  if (!name || !dir || !command) {
+    console.error("usage: stackbar add <name> --dir <path> --cmd <command> [--port N]");
+    process.exit(1);
+  }
+  const r = await api.add({
+    name,
+    directory: dir,
+    command,
+    port: portStr ? parseInt(portStr, 10) : undefined,
+  });
+  console.log(`Added "${name}" (${r.id})`);
+}
+
+async function cmdEdit() {
+  const target = args[1];
+  if (!target) {
+    console.error("usage: stackbar edit <service> [--name N] [--dir P] [--cmd C] [--port N]");
+    process.exit(1);
+  }
+  const patch: Record<string, unknown> = {};
+  const name = flag("name");
+  const dir = flag("dir", "d");
+  const command = flag("cmd", "c");
+  const portStr = flag("port", "p");
+  if (name !== undefined) patch.name = name;
+  if (dir !== undefined) patch.directory = dir;
+  if (command !== undefined) patch.command = command;
+  if (portStr !== undefined) patch.port = portStr === "" ? null : parseInt(portStr, 10);
+  if (Object.keys(patch).length === 0) {
+    console.error("nothing to change; pass --name/--dir/--cmd/--port");
+    process.exit(1);
+  }
+  await api.edit(target, patch);
+  console.log(`Updated "${target}"`);
+}
+
+async function cmdRemove() {
+  const target = args[1];
+  if (!target) {
+    console.error("usage: stackbar remove <service>");
+    process.exit(1);
+  }
+  await api.remove(target);
+  console.log(`Removed "${target}"`);
+}
+
+async function cmdAction(action: "start" | "stop" | "restart") {
+  const target = args[1];
+  if (!target) {
+    console.error(`usage: stackbar ${action} <service|all>`);
+    process.exit(1);
+  }
+  if (target === "all") {
+    if (action === "start") await api.startAll();
+    else if (action === "stop") await api.stopAll();
+    else {
+      await api.stopAll();
+      await api.startAll();
+    }
+    console.log(`${action} all`);
+    return;
+  }
+  if (action === "start") await api.start(target);
+  else if (action === "stop") await api.stop(target);
+  else await api.restart(target);
+  console.log(`${action} "${target}"`);
 }
 
 async function cmdLogs() {
@@ -77,19 +162,16 @@ async function cmdLogs() {
   if (hasFlag("follow", "f")) {
     const logPath = join(LOGS_DIR, `${svc.id}.log`);
     if (!existsSync(logPath)) return;
-    let pos = Buffer.byteLength(tail, "utf8");
-    const { statSync } = await import("node:fs");
-    pos = statSync(logPath).size;
+    let pos = statSync(logPath).size;
     watch(logPath, () => {
       const size = statSync(logPath).size;
       if (size > pos) {
         createReadStream(logPath, { start: pos, end: size }).pipe(process.stdout);
         pos = size;
       } else if (size < pos) {
-        pos = 0; // file was rotated/reset
+        pos = 0; // rotated/reset
       }
     });
-    // keep process alive
     await new Promise(() => {});
   }
 }
@@ -98,7 +180,7 @@ async function cmdSearch() {
   const name = args[1];
   const pattern = args[2];
   if (!name || !pattern) {
-    console.error('usage: stackbar search <service> <pattern> [--regex] [--ignore-case]');
+    console.error("usage: stackbar search <service> <pattern> [--regex] [--ignore-case]");
     process.exit(1);
   }
   const svc = await resolveService(name);
@@ -110,26 +192,36 @@ async function cmdSearch() {
     regex: hasFlag("regex"),
     ignoreCase: hasFlag("ignore-case", "i"),
   });
-  if (hits.length === 0) {
-    console.log("(no matches)");
-    return;
-  }
-  console.log(hits.join("\n"));
+  console.log(hits.length === 0 ? "(no matches)" : hits.join("\n"));
 }
 
 function usage() {
-  console.log(`stackbar — read StackBar service logs
+  console.log(`stackbar — control and inspect StackBar services
 
-Usage:
-  stackbar list                          List services and log status
-  stackbar logs <service> [-n N] [-f]    Show last N lines (default 200); -f to follow
-  stackbar search <service> <pattern>    Search log lines
-                 [--regex] [--ignore-case]
+Services:
+  stackbar list                                    List services + live status
+  stackbar add <name> --dir P --cmd C [--port N]   Add a service
+  stackbar edit <service> [--name|--dir|--cmd|--port ...]   Edit a service
+  stackbar remove <service>                        Remove a service
 
-<service> matches by exact id, exact name, or partial name (case-insensitive).`);
+Actions:
+  stackbar start   <service|all>                   Start
+  stackbar stop    <service|all>                   Stop
+  stackbar restart <service|all>                   Restart
+
+Logs:
+  stackbar logs <service> [-n N] [-f]              Last N lines (default 200); -f follows
+  stackbar search <service> <pattern> [--regex] [--ignore-case]
+
+<service> matches by exact id, exact name, or partial name (case-insensitive).
+Service/action commands need the StackBar app running; log reads work from files.`);
 }
 
 main().catch((err) => {
-  console.error(err);
+  if (err instanceof StackBarNotRunning) {
+    console.error(err.message);
+    process.exit(2);
+  }
+  console.error(err.message ?? err);
   process.exit(1);
 });

@@ -8,6 +8,7 @@ final class ServiceManager: ObservableObject {
 
     private var healthTimer: Timer?
     private let configURL: URL
+    private var controlServer: ControlServer?
 
     init() {
         let support = FileManager.default
@@ -18,6 +19,11 @@ final class ServiceManager: ObservableObject {
 
         load()
         startHealthTimer()
+
+        // Local HTTP control channel for the CLI / MCP.
+        let server = ControlServer(manager: self)
+        self.controlServer = server
+        server.start()
     }
 
     // MARK: - Aggregate status for the menu bar glyph
@@ -58,10 +64,41 @@ final class ServiceManager: ObservableObject {
         persist()
     }
 
+    // MARK: - Lookup & per-id actions (used by the control server)
+
+    func runner(id: UUID) -> RunningService? {
+        runners.first { $0.id == id }
+    }
+
+    /// Resolve by exact id string, exact name, or partial name (case-insensitive).
+    func resolve(_ nameOrId: String) -> RunningService? {
+        let lower = nameOrId.lowercased()
+        return runners.first { $0.id.uuidString == nameOrId }
+            ?? runners.first { $0.config.name.lowercased() == lower }
+            ?? runners.first { $0.config.name.lowercased().contains(lower) }
+    }
+
     // MARK: - Bulk controls
 
     func startAll() { runners.forEach { $0.start() } }
     func stopAll() { runners.forEach { $0.stop() } }
+
+    // MARK: - Status snapshot (JSON-friendly)
+
+    /// A serializable view of every service + live status, for the control API.
+    func statusSnapshot() -> [[String: Any]] {
+        runners.map { r in
+            [
+                "id": r.id.uuidString,
+                "name": r.config.name,
+                "directory": r.config.directory,
+                "command": r.config.command,
+                "port": r.config.port as Any,
+                "status": r.status.label,
+                "live": r.isLive,
+            ]
+        }
+    }
 
     // MARK: - Health polling
 
