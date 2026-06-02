@@ -49,11 +49,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
+        // Header row (disabled, just a title).
+        let header = NSMenuItem(title: "StackBar", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(.separator())
+
         if manager.runners.isEmpty {
             let empty = NSMenuItem(title: "No services yet", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
-            addItem(to: menu, title: "Add a service…", action: #selector(openSettings), key: ",")
+            addItem(to: menu, title: "Add a service…", action: #selector(openSettings), key: "")
         } else {
             for runner in manager.runners {
                 menu.addItem(serviceItem(for: runner))
@@ -62,18 +68,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        addItem(to: menu, title: "Start All", action: #selector(startAll), key: "s")
-        addItem(to: menu, title: "Stop All", action: #selector(stopAll), key: "x")
+        addItem(to: menu, title: "Start All", action: #selector(startAll), key: "")
+        addItem(to: menu, title: "Stop All", action: #selector(stopAll), key: "")
         menu.addItem(.separator())
-        addItem(to: menu, title: "Edit Services…", action: #selector(openSettings), key: ",")
+        // No ⌘, here: that shortcut makes macOS decorate the item with a gear.
+        addItem(to: menu, title: "Edit Services…", action: #selector(openSettings), key: "")
         addItem(to: menu, title: "Quit StackBar", action: #selector(quit), key: "q")
     }
 
     // MARK: - Per-service item + submenu
 
     private func serviceItem(for runner: RunningService) -> NSMenuItem {
-        let port = runner.config.port.map { " :\($0)" } ?? ""
-        let item = NSMenuItem(title: "\(runner.config.name)\(port)", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: runner.config.name, action: nil, keyEquivalent: "")
+        item.attributedTitle = serviceTitle(name: runner.config.name, port: runner.config.port)
         item.image = statusImage(for: runner.status)
 
         let submenu = NSMenu()
@@ -110,6 +117,29 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         item.submenu = submenu
         return item
+    }
+
+    /// Service name in the normal menu color, with the port appended in a dimmer
+    /// secondary color so it reads as metadata rather than part of the name.
+    private func serviceTitle(name: String, port: Int?) -> NSAttributedString {
+        let menuFont = NSFont.menuFont(ofSize: 0)
+        let title = NSMutableAttributedString(
+            string: name,
+            attributes: [
+                .font: menuFont,
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+        if let port {
+            title.append(NSAttributedString(
+                string: "   :\(port)",
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: menuFont.pointSize - 1, weight: .regular),
+                    .foregroundColor: NSColor.tertiaryLabelColor,
+                ]
+            ))
+        }
+        return title
     }
 
     /// A small colored dot image reflecting status, drawn as a template-free swatch.
