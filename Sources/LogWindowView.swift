@@ -4,6 +4,8 @@ import SwiftUI
 struct LogWindowView: View {
     @EnvironmentObject var manager: ServiceManager
     let serviceID: UUID?
+    /// If set, show only this command's log; otherwise the combined log.
+    var commandIndex: Int? = nil
 
     private var runner: RunningService? {
         guard let serviceID else { return nil }
@@ -12,7 +14,7 @@ struct LogWindowView: View {
 
     var body: some View {
         if let runner {
-            LogContent(runner: runner)
+            LogContent(runner: runner, commandIndex: commandIndex)
         } else {
             ContentUnavailableView("Service not found", systemImage: "questionmark.folder")
                 .frame(width: 420, height: 240)
@@ -22,8 +24,21 @@ struct LogWindowView: View {
 
 private struct LogContent: View {
     @ObservedObject var runner: RunningService
+    let commandIndex: Int?
     @State private var autoScroll = true
     @State private var filter = ""
+
+    /// Status to show: the specific command's, or the service's.
+    private var displayStatus: ServiceStatus {
+        if let i = commandIndex, i < runner.commandStates.count { return runner.commandStates[i] }
+        return runner.status
+    }
+
+    /// Subtitle: the specific command, or all commands.
+    private var displayCommand: String {
+        if let i = commandIndex, i < runner.config.commands.count { return runner.config.commands[i] }
+        return runner.config.displayCommand
+    }
 
     var body: some View {
         NavigationStack {
@@ -31,7 +46,7 @@ private struct LogContent: View {
                 .frame(minWidth: 600, minHeight: 380)
                 .toolbar { toolbarContent }
                 .navigationTitle(runner.config.name)
-                .navigationSubtitle(runner.status.label)
+                .navigationSubtitle(displayStatus.label)
         }
     }
 
@@ -41,8 +56,8 @@ private struct LogContent: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             HStack(spacing: 6) {
-                StatusDot(status: runner.status)
-                Text(runner.config.displayCommand)
+                StatusDot(status: displayStatus)
+                Text(displayCommand)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -82,9 +97,17 @@ private struct LogContent: View {
             .searchable(text: $filter, placement: .toolbar, prompt: "Filter log")
     }
 
+    /// The source buffer: one command's lines, or the combined log.
+    private var sourceLines: [String] {
+        if let i = commandIndex, i < runner.logLinesByCommand.count {
+            return runner.logLinesByCommand[i]
+        }
+        return runner.logLines
+    }
+
     /// Lines after applying the toolbar filter.
     private var visibleLines: [String] {
-        guard !filter.isEmpty else { return runner.logLines }
-        return runner.logLines.filter { $0.localizedCaseInsensitiveContains(filter) }
+        guard !filter.isEmpty else { return sourceLines }
+        return sourceLines.filter { $0.localizedCaseInsensitiveContains(filter) }
     }
 }

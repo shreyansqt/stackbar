@@ -27,6 +27,11 @@ enum LogStore {
         logsDir.appendingPathComponent("\(id.uuidString).log")
     }
 
+    /// Per-command log file, e.g. `<id>.0.log`, for multi-command services.
+    static func logFile(for id: UUID, command index: Int) -> URL {
+        logsDir.appendingPathComponent("\(id.uuidString).\(index).log")
+    }
+
     static func metaFile(for id: UUID) -> URL {
         logsDir.appendingPathComponent("\(id.uuidString).meta.json")
     }
@@ -35,12 +40,16 @@ enum LogStore {
 /// Append-only writer for one service's log file, with size-based rotation.
 /// Lives on a serial queue so the readability handler never blocks the main actor.
 final class LogFileWriter {
+    private let id: UUID
     private let url: URL
     private let queue: DispatchQueue
     private var handle: FileHandle?
+    /// Per-command file handles, keyed by command index.
+    private var commandHandles: [Int: FileHandle] = [:]
     private let maxBytes: UInt64 = 5 * 1024 * 1024 // 5 MB, then rotate to .1
 
     init(id: UUID) {
+        self.id = id
         self.url = LogStore.logFile(for: id)
         self.queue = DispatchQueue(label: "stackbar.log.\(id.uuidString)")
     }
@@ -57,13 +66,23 @@ final class LogFileWriter {
         try? data.write(to: LogStore.metaFile(for: service.id))
     }
 
-    /// Truncate the log at (re)start so a fresh run starts clean.
+    /// Truncate the combined log + all per-command logs at (re)start.
     func reset() {
         queue.async {
             self.handle?.closeFile()
             self.handle = nil
             try? Data().write(to: self.url)
             self.handle = try? FileHandle(forWritingTo: self.url)
+            // Clear any per-command files from the previous run.
+            for (_, h) in self.commandHandles { h.closeFile() }
+            self.commandHandles.removeAll()
+            let dir = LogStore.logsDir
+            let prefix = "\(self.id.uuidString)."
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+                for f in files where f.hasPrefix(prefix) && f.hasSuffix(".log") && f != "\(self.id.uuidString).log" {
+                    try? FileManager.default.removeItem(at: dir.appendingPathComponent(f))
+                }
+            }
         }
     }
 
@@ -73,6 +92,26 @@ final class LogFileWriter {
             guard let h = self.handle, let data = text.data(using: .utf8) else { return }
             h.write(data)
             self.rotateIfNeeded()
+        }
+    }
+
+    /// Append to a specific command's log file.
+    func append(_ text: String, commandIndex: Int) {
+        queue.async {
+            let h: FileHandle
+            if let existing = self.commandHandles[commandIndex] {
+                h = existing
+            } else {
+                let url = LogStore.logFile(for: self.id, command: commandIndex)
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    FileManager.default.createFile(atPath: url.path, contents: nil)
+                }
+                guard let newHandle = try? FileHandle(forWritingTo: url) else { return }
+                newHandle.seekToEndOfFile()
+                self.commandHandles[commandIndex] = newHandle
+                h = newHandle
+            }
+            if let data = text.data(using: .utf8) { h.write(data) }
         }
     }
 

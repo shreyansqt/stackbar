@@ -10,8 +10,14 @@ final class RunningService: ObservableObject, Identifiable {
     nonisolated var id: UUID { config.id }
 
     @Published private(set) var status: ServiceStatus = .idle
-    /// Ring buffer of recent log lines (all commands merged).
+    /// Ring buffer of recent log lines (all commands merged, time-ordered).
     @Published private(set) var logLines: [String] = []
+    /// Per-command ring buffers, indexed to match `config.commands`. Lets the UI
+    /// show one command's output in isolation (e.g. transpile-watch vs docker up).
+    @Published private(set) var logLinesByCommand: [[String]] = []
+    /// Per-command status, indexed to match `config.commands`, so the UI can show
+    /// which specific command is running/crashed in a multi-command service.
+    @Published private(set) var commandStates: [ServiceStatus] = []
 
     /// One child process per command in `config.commands`.
     private var processes: [Process] = []
@@ -43,6 +49,8 @@ final class RunningService: ObservableObject, Identifiable {
     func start() {
         guard !isLive else { return }
         logLines.removeAll()
+        logLinesByCommand = Array(repeating: [], count: config.commands.count)
+        commandStates = Array(repeating: .starting, count: config.commands.count)
         logWriter.reset()
         status = .starting
         stopping = false
@@ -54,14 +62,14 @@ final class RunningService: ObservableObject, Identifiable {
         let multi = config.commands.count > 1
         for (idx, command) in config.commands.enumerated() {
             let prefix = multi ? "[\(idx + 1)] " : ""
-            spawn(command, prefix: prefix)
+            spawn(command, index: idx, prefix: prefix)
         }
         if processes.isEmpty {
             status = .crashed(code: -1)
         }
     }
 
-    private func spawn(_ command: String, prefix: String) {
+    private func spawn(_ command: String, index: Int, prefix: String) {
         let proc = Process()
         // Run the command in its OWN process group/session so we can later kill the
         // entire subtree (zsh → pnpm → turbo → workerd, etc.) with one group signal.
@@ -85,11 +93,11 @@ final class RunningService: ObservableObject, Identifiable {
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor in self?.append(text, prefix: prefix) }
+            Task { @MainActor in self?.append(text, index: index, prefix: prefix) }
         }
         proc.terminationHandler = { [weak self] p in
             let code = p.terminationStatus
-            Task { @MainActor in self?.handleTermination(pipe: pipe, code: code, prefix: prefix) }
+            Task { @MainActor in self?.handleTermination(pipe: pipe, index: index, code: code, prefix: prefix) }
         }
 
         do {
@@ -97,9 +105,11 @@ final class RunningService: ObservableObject, Identifiable {
             processes.append(proc)
             pipes.append(pipe)
             launchedCount += 1
-            append("[stackbar] started: \(command)\n", prefix: prefix)
+            commandStates[index] = .running
+            append("[stackbar] started: \(command)\n", index: index, prefix: prefix)
         } catch {
-            append("[stackbar] failed to start: \(error.localizedDescription)\n", prefix: prefix)
+            commandStates[index] = .crashed(code: -1)
+            append("[stackbar] failed to start: \(error.localizedDescription)\n", index: index, prefix: prefix)
         }
     }
 
@@ -160,7 +170,7 @@ final class RunningService: ObservableObject, Identifiable {
         status = .stopping
         let directory = config.directory
         let stopCommands = config.stopCommands
-        append("[stackbar] stopping…\n", prefix: "")
+        append("[stackbar] stopping…\n", index: nil, prefix: "")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             for command in stopCommands {
@@ -174,9 +184,9 @@ final class RunningService: ObservableObject, Identifiable {
                 pipe.fileHandleForReading.readabilityHandler = { handle in
                     let data = handle.availableData
                     guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                    Task { @MainActor in self?.append(text, prefix: "[stop] ") }
+                    Task { @MainActor in self?.append(text, index: nil, prefix: "[stop] ") }
                 }
-                Task { @MainActor in self?.append("[stackbar] stop: \(command)\n", prefix: "") }
+                Task { @MainActor in self?.append("[stackbar] stop: \(command)\n", index: nil, prefix: "") }
                 try? proc.run()
                 proc.waitUntilExit()
                 pipe.fileHandleForReading.readabilityHandler = nil
@@ -184,7 +194,7 @@ final class RunningService: ObservableObject, Identifiable {
             Task { @MainActor in
                 self?.status = .idle
                 self?.stopping = false
-                self?.append("[stackbar] stopped.\n", prefix: "")
+                self?.append("[stackbar] stopped.\n", index: nil, prefix: "")
             }
         }
     }
@@ -213,16 +223,33 @@ final class RunningService: ObservableObject, Identifiable {
             return
         }
         status = PortProbe.isOpen(port: port) ? .running : .starting
+        // Reflect health onto still-live commands (leave crashed ones as crashed).
+        for i in commandStates.indices {
+            if case .crashed = commandStates[i] { continue }
+            commandStates[i] = status
+        }
     }
 
-    private func append(_ text: String, prefix: String) {
+    /// Append output. `index` is the command it came from (nil for service-level
+    /// lifecycle messages like stop). Writes to the combined buffer/file AND the
+    /// per-command buffer/file.
+    private func append(_ text: String, index: Int?, prefix: String) {
         let prefixed = prefix.isEmpty ? text : applyPrefix(prefix, to: text)
         logWriter.append(prefixed)
         let incoming = prefixed.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        // Combined buffer (all commands, time-ordered).
         logLines.append(contentsOf: incoming)
-        if logLines.count > maxLines {
-            logLines.removeFirst(logLines.count - maxLines)
+        if logLines.count > maxLines { logLines.removeFirst(logLines.count - maxLines) }
+
+        // Per-command buffer + file (unprefixed — it's already isolated).
+        guard let index, index < logLinesByCommand.count else { return }
+        let raw = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        logLinesByCommand[index].append(contentsOf: raw)
+        if logLinesByCommand[index].count > maxLines {
+            logLinesByCommand[index].removeFirst(logLinesByCommand[index].count - maxLines)
         }
+        logWriter.append(text, commandIndex: index)
     }
 
     /// Prefix each non-empty line so interleaved multi-command output stays readable.
@@ -236,21 +263,23 @@ final class RunningService: ObservableObject, Identifiable {
         return out
     }
 
-    private func handleTermination(pipe: Pipe, code: Int32, prefix: String) {
+    private func handleTermination(pipe: Pipe, index: Int, code: Int32, prefix: String) {
         pipe.fileHandleForReading.readabilityHandler = nil
         terminatedCount += 1
-        append("[stackbar] exited with code \(code)\n", prefix: prefix)
+        append("[stackbar] exited with code \(code)\n", index: index, prefix: prefix)
 
         // User-requested stop: SIGTERM gives a non-zero code (15), which is not
         // a crash. Stay idle, and ignore the codes entirely.
         if stopping {
+            if index < commandStates.count { commandStates[index] = .idle }
             if terminatedCount >= launchedCount { status = .idle; stopping = false }
             return
         }
-        // A command died on its own. Non-zero exit => crash; bring the rest down
-        // so the service's state is consistent. A clean exit of one command in a
-        // multi-command service is unusual but treated as the service stopping
-        // once all have exited.
+        // A command died on its own. Record which command, and mark the service
+        // crashed on a non-zero exit; bring the rest down so state is consistent.
+        if index < commandStates.count {
+            commandStates[index] = code == 0 ? .idle : .crashed(code: code)
+        }
         if code != 0 {
             status = .crashed(code: code)
             for proc in processes where proc.isRunning {

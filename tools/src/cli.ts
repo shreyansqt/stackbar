@@ -165,7 +165,7 @@ async function cmdAction(action: "start" | "stop" | "restart") {
 async function cmdLogs() {
   const name = args[1];
   if (!name) {
-    console.error("usage: stackbar logs <service> [-n LINES] [-f]");
+    console.error("usage: stackbar logs <service> [-n LINES] [-f] [--cmd N]");
     process.exit(1);
   }
   const svc = await resolveService(name);
@@ -174,11 +174,14 @@ async function cmdLogs() {
     process.exit(1);
   }
   const lines = parseInt(flag("lines", "n") ?? "200", 10);
-  const tail = await readLogTail(svc, lines);
+  const cmdFlag = flag("cmd");
+  const cmdIndex = cmdFlag ? parseInt(cmdFlag, 10) - 1 : undefined;
+  const tail = await readLogTail(svc, lines, cmdIndex);
   process.stdout.write(tail.endsWith("\n") ? tail : tail + "\n");
 
   if (hasFlag("follow", "f")) {
-    const logPath = join(LOGS_DIR, `${svc.id}.log`);
+    const suffix = cmdIndex === undefined ? "" : `.${cmdIndex}`;
+    const logPath = join(LOGS_DIR, `${svc.id}${suffix}.log`);
     if (!existsSync(logPath)) return;
     let pos = statSync(logPath).size;
     watch(logPath, () => {

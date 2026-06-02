@@ -91,12 +91,20 @@ export async function resolveService(
   );
 }
 
-/** Read the last `lines` lines of a service's log. */
+/** Path to a service's combined log, or one command's log if commandIndex given. */
+function logPathFor(service: Service, commandIndex?: number): string {
+  return commandIndex === undefined
+    ? join(LOGS_DIR, `${service.id}.log`)
+    : join(LOGS_DIR, `${service.id}.${commandIndex}.log`);
+}
+
+/** Read the last `lines` lines of a service's log (or one command's log). */
 export async function readLogTail(
   service: Service,
-  lines = 200
+  lines = 200,
+  commandIndex?: number
 ): Promise<string> {
-  const logPath = join(LOGS_DIR, `${service.id}.log`);
+  const logPath = logPathFor(service, commandIndex);
   if (!existsSync(logPath)) return "";
   const content = await readFile(logPath, "utf8");
   const all = content.split("\n");

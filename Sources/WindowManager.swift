@@ -9,7 +9,8 @@ final class WindowManager {
     private let manager: ServiceManager
     private var settingsWindow: NSWindow?
     /// One log window per service id.
-    private var logWindows: [UUID: NSWindow] = [:]
+    /// Keyed by "<id>" for a whole service, or "<id>.<cmdIndex>" for one command.
+    private var logWindows: [String: NSWindow] = [:]
 
     init(manager: ServiceManager) {
         self.manager = manager
@@ -29,19 +30,23 @@ final class WindowManager {
         window.makeKeyAndOrderFront(nil)
     }
 
-    func openLogs(for id: UUID) {
-        guard manager.runner(id: id) != nil else { return }
+    func openLogs(for id: UUID, commandIndex: Int? = nil) {
+        guard let runner = manager.runner(id: id) else { return }
         NSApp.activate(ignoringOtherApps: true)
-        if let existing = logWindows[id] {
+        let key = commandIndex.map { "\(id.uuidString).\($0)" } ?? id.uuidString
+        if let existing = logWindows[key] {
             existing.makeKeyAndOrderFront(nil)
             return
         }
-        let root = LogWindowView(serviceID: id).environmentObject(manager)
-        let name = manager.runner(id: id)?.config.name ?? "Logs"
-        let window = makeWindow(title: "\(name) — logs", content: root,
+        let root = LogWindowView(serviceID: id, commandIndex: commandIndex).environmentObject(manager)
+        var title = runner.config.name
+        if let commandIndex, commandIndex < runner.config.commands.count {
+            title += " — \(runner.config.commands[commandIndex])"
+        }
+        let window = makeWindow(title: title, content: root,
                                 size: NSSize(width: 720, height: 460))
         window.delegate = closeObserver
-        logWindows[id] = window
+        logWindows[key] = window
         window.makeKeyAndOrderFront(nil)
     }
 

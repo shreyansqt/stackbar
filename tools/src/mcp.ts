@@ -125,15 +125,19 @@ server.tool(
   {
     service: z.string().describe("Service name (exact or partial, case-insensitive) or id"),
     lines: z.number().int().positive().max(5000).default(200),
+    command: z.number().int().min(1).optional()
+      .describe("For multi-command services, which command's log (1-based). Omit for the combined log."),
   },
-  async ({ service, lines }) => {
+  async ({ service, lines, command }) => {
     const svc = await resolveService(service);
     if (!svc) return text(`No service matching "${service}". Call list_services first.`, true);
-    const tail = await readLogTail(svc, lines);
+    const idx = command === undefined ? undefined : command - 1;
+    const tail = await readLogTail(svc, lines, idx);
+    const label = command === undefined ? svc.name : `${svc.name} (command ${command})`;
     return text(
       tail.trim().length === 0
-        ? `(${svc.name}: log is empty — service may not have been started)`
-        : `# ${svc.name} — last ${lines} lines\n\n${tail}`
+        ? `(${label}: log is empty — service may not have been started)`
+        : `# ${label} — last ${lines} lines\n\n${tail}`
     );
   }
 );

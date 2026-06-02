@@ -55,17 +55,39 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private var spinnerTimer: Timer?
     private var spinnerAngle: CGFloat = 0
+    private var lastState: ServiceManager.IconState?
+    private var checkmarkTimer: Timer?
 
     private func updateIcon() {
         guard let button = statusItem.button else { return }
         let state = manager.iconState
+        defer { lastState = state }
 
         // Start/stop the spinner animation as we enter/leave the booting state.
         if state == .booting {
+            cancelCheckmark()
             startSpinner()
             return   // the spinner timer drives the image
         }
         stopSpinner()
+
+        // When we *transition into* all-running, flash a checkmark briefly before
+        // settling to the solid glyph — a small "everything's up" confirmation.
+        if state == .allRunning, lastState != nil, lastState != .allRunning {
+            setImage(symbol("checkmark.circle.fill"), on: button)
+            cancelCheckmark()
+            let timer = Timer(timeInterval: 1.2, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let button = self.statusItem.button else { return }
+                    if self.manager.iconState == .allRunning {
+                        self.setImage(self.symbol("square.stack.3d.up.fill"), on: button)
+                    }
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            checkmarkTimer = timer
+            return
+        }
 
         let image: NSImage?
         switch state {
@@ -78,9 +100,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .booting:
             image = nil // handled above
         }
+        setImage(image, on: button)
+    }
+
+    private func setImage(_ image: NSImage?, on button: NSStatusBarButton) {
         image?.isTemplate = true
         button.image = image
         button.imagePosition = .imageOnly
+    }
+
+    private func cancelCheckmark() {
+        checkmarkTimer?.invalidate()
+        checkmarkTimer = nil
     }
 
     /// A template SF Symbol at the menu bar size, optionally drawn at reduced alpha
@@ -201,10 +232,28 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             submenu.addItem(open)
         }
 
-        let logs = NSMenuItem(title: "View Logs", action: #selector(viewLogs(_:)), keyEquivalent: "")
-        logs.target = self
-        logs.representedObject = runner.id
-        submenu.addItem(logs)
+        // Logs: a single item for one-command services; a submenu (one entry per
+        // command, each with its own status dot) for multi-command services.
+        if runner.config.commands.count > 1 {
+            let logs = NSMenuItem(title: "View Logs", action: nil, keyEquivalent: "")
+            let logsSub = NSMenu()
+            for (idx, command) in runner.config.commands.enumerated() {
+                let title = "\(idx + 1) · \(command)"
+                let entry = NSMenuItem(title: title, action: #selector(viewLogs(_:)), keyEquivalent: "")
+                entry.target = self
+                entry.representedObject = LogTarget(id: runner.id, commandIndex: idx)
+                let state = idx < runner.commandStates.count ? runner.commandStates[idx] : .idle
+                entry.image = statusImage(for: state)
+                logsSub.addItem(entry)
+            }
+            logs.submenu = logsSub
+            submenu.addItem(logs)
+        } else {
+            let logs = NSMenuItem(title: "View Logs", action: #selector(viewLogs(_:)), keyEquivalent: "")
+            logs.target = self
+            logs.representedObject = LogTarget(id: runner.id, commandIndex: nil)
+            submenu.addItem(logs)
+        }
 
         item.submenu = submenu
         return item
@@ -275,8 +324,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func restartService(_ sender: NSMenuItem) { runner(from: sender)?.restart() }
 
     @objc private func viewLogs(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID else { return }
-        windows.openLogs(for: id)
+        guard let target = sender.representedObject as? LogTarget else { return }
+        windows.openLogs(for: target.id, commandIndex: target.commandIndex)
     }
 
     @objc private func openInBrowser(_ sender: NSMenuItem) {
@@ -294,5 +343,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
+}
+
+/// Identifies which log a menu item opens: a whole service (commandIndex nil) or
+/// one command of a multi-command service. Reference type so it rides on an
+/// NSMenuItem's representedObject.
+final class LogTarget: NSObject {
+    let id: UUID
+    let commandIndex: Int?
+    init(id: UUID, commandIndex: Int?) {
+        self.id = id
+        self.commandIndex = commandIndex
+    }
 }
 
