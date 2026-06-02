@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuController: MenuBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Log.info("StackBar launched")
         menuController = MenuBarController(manager: manager)
     }
 
@@ -30,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// subtrees (zsh → pnpm → turbo → workerd) that otherwise linger as zombie
     /// node/workerd processes eating RAM.
     func applicationWillTerminate(_ notification: Notification) {
+        Log.info("StackBar terminating — stopping all services")
         manager.terminateAllNow()
     }
 }

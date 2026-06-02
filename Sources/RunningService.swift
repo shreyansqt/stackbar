@@ -44,6 +44,15 @@ final class RunningService: ObservableObject, Identifiable {
         return true
     }
 
+    /// In a transitional state (starting up or running stop commands). The UI
+    /// disables actions while busy so the user can't fire overlapping commands
+    /// (e.g. start during a docker-compose-down teardown).
+    var isBusy: Bool {
+        if case .starting = status { return true }
+        if case .stopping = status { return true }
+        return false
+    }
+
     private var anyRunning: Bool { processes.contains { $0.isRunning } }
 
     func start() {
@@ -106,9 +115,11 @@ final class RunningService: ObservableObject, Identifiable {
             pipes.append(pipe)
             launchedCount += 1
             commandStates[index] = .running
+            Log.info("[\(config.name)] spawned cmd[\(index)] pid \(proc.processIdentifier): \(command)")
             append("[stackbar] started: \(command)\n", index: index, prefix: prefix)
         } catch {
             commandStates[index] = .crashed(code: -1)
+            Log.error("[\(config.name)] cmd[\(index)] failed to launch: \(command) — \(error.localizedDescription)")
             append("[stackbar] failed to start: \(error.localizedDescription)\n", index: index, prefix: prefix)
         }
     }
@@ -127,6 +138,7 @@ final class RunningService: ObservableObject, Identifiable {
     }
 
     func stop() {
+        Log.info("[\(config.name)] stop requested")
         stopping = true
         // 1. SIGTERM the start processes (the whole group; dev servers spawn children).
         for proc in processes where proc.isRunning {
@@ -135,16 +147,29 @@ final class RunningService: ObservableObject, Identifiable {
         }
         // 1b. Backstop for detached workers (Turbo) that escaped the group signal.
         Self.killProcessOnPort(config.port)
-        // 2. Run any stop commands (e.g. `docker compose down`) in order, then idle.
+        // 2. Run any stop commands (e.g. `docker compose down`) AFTER the start
+        //    processes have fully exited. Critical for docker: SIGTERM-ing a
+        //    `docker compose up` makes Compose tear the stack down itself, so
+        //    firing `docker compose down` at the same time collides on the daemon
+        //    and can wedge it. So wait for the up-process to finish first.
         if config.stopCommands.isEmpty {
             status = .idle
         } else {
-            runStopCommands()
+            let procs = processes
+            runStopCommands(afterExitOf: procs)
         }
     }
 
-    /// Kill whatever is listening on `port` (SIGTERM). Catches detached dev-server
-    /// processes that re-parented away from us. No-op if no port is configured.
+    /// Processes we must never kill via the port backstop. For docker-backed
+    /// services the listening process on the port is the container runtime's own
+    /// proxy (e.g. OrbStack / Docker / containerd) — killing it takes the whole
+    /// daemon down. The backstop is only meant to catch detached dev-server workers.
+    private static let protectedProcessNames = [
+        "orbstack", "docker", "com.docker", "containerd", "vpnkit", "qemu",
+    ]
+
+    /// Kill whatever is listening on `port` (SIGTERM), EXCEPT container-runtime
+    /// processes. Catches detached dev-server workers that re-parented away from us.
     static func killProcessOnPort(_ port: Int?) {
         guard let port else { return }
         let lsof = Process()
@@ -158,22 +183,53 @@ final class RunningService: ObservableObject, Identifiable {
         lsof.waitUntilExit()
         guard let out = String(data: data, encoding: .utf8) else { return }
         for line in out.split(whereSeparator: \.isNewline) {
-            if let pid = Int32(line.trimmingCharacters(in: .whitespaces)) {
-                kill(pid, SIGTERM)
+            guard let pid = Int32(line.trimmingCharacters(in: .whitespaces)) else { continue }
+            let name = processName(pid: pid).lowercased()
+            if protectedProcessNames.contains(where: { name.contains($0) }) {
+                Log.warn("port \(port): refusing to kill protected process \(pid) (\(name))")
+                continue
             }
+            kill(pid, SIGTERM)
         }
+    }
+
+    /// Best-effort process command name for a pid (via `ps -o comm=`).
+    private static func processName(pid: Int32) -> String {
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-o", "comm=", "-p", String(pid)]
+        let pipe = Pipe()
+        ps.standardOutput = pipe
+        ps.standardError = Pipe()
+        guard (try? ps.run()) != nil else { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     /// Run stopCommands sequentially on a background queue (each may block, e.g.
     /// docker teardown), streaming output into the log. Status -> idle when done.
-    private func runStopCommands() {
+    private func runStopCommands(afterExitOf procs: [Process]) {
         status = .stopping
         let directory = config.directory
         let stopCommands = config.stopCommands
+        let name = config.name
         append("[stackbar] stopping…\n", index: nil, prefix: "")
+        Log.info("[\(name)] running \(stopCommands.count) stop command(s)")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            // Wait for the start processes to fully exit first (up to ~10s) so
+            // their own teardown can't collide with the stop commands.
+            let deadline = Date().addingTimeInterval(10)
+            for p in procs {
+                while p.isRunning && Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+            }
+            Log.info("[\(name)] start processes exited; running stop commands")
+
             for command in stopCommands {
+                Log.info("[\(name)] stop cmd start: \(command)")
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
                 proc.arguments = ["-lc", command]
@@ -187,10 +243,23 @@ final class RunningService: ObservableObject, Identifiable {
                     Task { @MainActor in self?.append(text, index: nil, prefix: "[stop] ") }
                 }
                 Task { @MainActor in self?.append("[stackbar] stop: \(command)\n", index: nil, prefix: "") }
-                try? proc.run()
+                do {
+                    try proc.run()
+                } catch {
+                    Log.error("[\(name)] stop cmd FAILED to launch: \(command) — \(error.localizedDescription)")
+                    pipe.fileHandleForReading.readabilityHandler = nil
+                    continue
+                }
                 proc.waitUntilExit()
                 pipe.fileHandleForReading.readabilityHandler = nil
+                let code = proc.terminationStatus
+                if code == 0 {
+                    Log.info("[\(name)] stop cmd done (exit 0): \(command)")
+                } else {
+                    Log.warn("[\(name)] stop cmd exited \(code): \(command)")
+                }
             }
+            Log.info("[\(name)] all stop commands finished")
             Task { @MainActor in
                 self?.status = .idle
                 self?.stopping = false

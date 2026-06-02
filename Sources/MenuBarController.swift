@@ -74,13 +74,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // When we *transition into* all-running, flash a checkmark briefly before
         // settling to the solid glyph — a small "everything's up" confirmation.
         if state == .allRunning, lastState != nil, lastState != .allRunning {
-            setImage(symbol("checkmark.circle.fill"), on: button)
+            setImage(symbol("checkmark.rectangle.stack.fill"), on: button)
             cancelCheckmark()
-            let timer = Timer(timeInterval: 1.2, repeats: false) { [weak self] _ in
+            let timer = Timer(timeInterval: 2.0, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let button = self.statusItem.button else { return }
                     if self.manager.iconState == .allRunning {
-                        self.setImage(self.symbol("square.stack.3d.up.fill"), on: button)
+                        self.setImage(self.symbol("rectangle.stack.fill"), on: button)
                     }
                 }
             }
@@ -89,14 +89,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
 
+        // Don't clobber the checkmark while it's still showing (further updates can
+        // fire during all-running). Let the checkmark timer settle the glyph.
+        if state == .allRunning, checkmarkTimer != nil { return }
+
         let image: NSImage?
         switch state {
         case .crashed:
             image = symbol("exclamationmark.triangle.fill")
         case .allRunning:
-            image = symbol("square.stack.3d.up.fill")
+            image = symbol("rectangle.stack.fill")
         case .idle:
-            image = symbol("square.stack.3d.up.fill", alpha: 0.4)
+            image = symbol("rectangle.stack.fill", alpha: 0.4)
         case .booting:
             image = nil // handled above
         }
@@ -115,16 +119,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     /// A template SF Symbol at the menu bar size, optionally drawn at reduced alpha
-    /// (still a template, so macOS tints it to the bar color and our alpha dims it).
-    private func symbol(_ name: String, alpha: CGFloat = 1) -> NSImage? {
+    /// and nudged vertically (points; negative = down) for optical alignment. Stays
+    /// a template so macOS tints it to the bar color.
+    private func symbol(_ name: String, alpha: CGFloat = 1, yOffset: CGFloat = 0) -> NSImage? {
         let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         guard let base = NSImage(systemSymbolName: name, accessibilityDescription: "StackBar")?
             .withSymbolConfiguration(config) else { return nil }
-        guard alpha < 1 else { return base }
+        guard alpha < 1 || yOffset != 0 else { return base }
 
-        let image = NSImage(size: base.size)
+        // Pad the canvas by |yOffset| so the shift doesn't clip the glyph.
+        let pad = abs(yOffset)
+        let size = NSSize(width: base.size.width, height: base.size.height + pad)
+        let image = NSImage(size: size)
         image.lockFocus()
-        base.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: alpha)
+        base.draw(at: NSPoint(x: 0, y: yOffset < 0 ? 0 : yOffset),
+                  from: .zero, operation: .sourceOver, fraction: alpha)
         image.unlockFocus()
         image.isTemplate = true
         return image
@@ -134,7 +143,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func startSpinner() {
         guard spinnerTimer == nil else { return }
-        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+        // 60fps for a smooth spin.
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tickSpinner() }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -150,7 +160,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func tickSpinner() {
         guard let button = statusItem.button else { return }
-        spinnerAngle -= .pi / 6   // 30° per tick, clockwise
+        spinnerAngle -= .pi / 60   // ~3° per tick at 60fps → one rotation ≈ 2s
         guard let base = symbol("arrow.triangle.2.circlepath") else { return }
 
         let size = base.size
@@ -207,17 +217,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         let submenu = NSMenu()
         let live = runner.isLive
+        // While starting/stopping, disable actions so the user can't fire an
+        // overlapping command (e.g. start during a docker-compose-down).
+        let busy = runner.isBusy
 
-        let toggle = NSMenuItem(title: live ? "Stop" : "Start",
-                                action: live ? #selector(stopService(_:)) : #selector(startService(_:)),
+        let toggle = NSMenuItem(title: busy ? (live ? "Stopping…" : "Starting…") : (live ? "Stop" : "Start"),
+                                action: busy ? nil : (live ? #selector(stopService(_:)) : #selector(startService(_:))),
                                 keyEquivalent: "")
         toggle.target = self
         toggle.representedObject = runner.id
+        toggle.isEnabled = !busy
         submenu.addItem(toggle)
 
         let restart = NSMenuItem(title: "Restart", action: #selector(restartService(_:)), keyEquivalent: "")
         restart.target = self
         restart.representedObject = runner.id
+        restart.isEnabled = !busy
         submenu.addItem(restart)
 
         submenu.addItem(.separator())
