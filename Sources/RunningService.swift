@@ -9,7 +9,15 @@ final class RunningService: ObservableObject, Identifiable {
     nonisolated let config: Service
     nonisolated var id: UUID { config.id }
 
-    @Published private(set) var status: ServiceStatus = .idle
+    @Published private(set) var status: ServiceStatus = .idle {
+        didSet {
+            // Drop the uptime anchor once the service is no longer up/coming up.
+            switch status {
+            case .idle, .crashed: startedAt = nil
+            default: break
+            }
+        }
+    }
     /// Ring buffer of recent log lines (all commands merged, time-ordered).
     @Published private(set) var logLines: [String] = []
     /// Per-command ring buffers, indexed to match `config.commands`. Lets the UI
@@ -59,6 +67,34 @@ final class RunningService: ObservableObject, Identifiable {
         return false
     }
 
+    /// When the current run started, for an uptime readout. nil when not running.
+    private(set) var startedAt: Date?
+
+    /// Compact uptime since start (snapshot — NSMenu can't tick live). nil if down.
+    var uptimeDescription: String? {
+        guard let startedAt else { return nil }
+        let secs = Int(Date().timeIntervalSince(startedAt))
+        if secs < 60 { return "\(secs)s" }
+        if secs < 3600 { return "\(secs / 60)m" }
+        if secs < 86400 { return "\(secs / 3600)h \(secs % 3600 / 60)m" }
+        return "\(secs / 86400)d \(secs % 86400 / 3600)h"
+    }
+
+    /// One-line human status for the Status section (e.g. "Running on port 8791 · 4m").
+    var statusLine: String {
+        switch status {
+        case .idle: return "Stopped"
+        case .starting: return "Starting…"
+        case .stopping: return "Stopping…"
+        case .crashed(let code): return "Crashed (exit \(code))"
+        case .running:
+            var s = "Running"
+            if let port = config.port { s += " on port \(port)" }
+            if let up = uptimeDescription { s += " · \(up)" }
+            return s
+        }
+    }
+
     private var anyRunning: Bool { processes.contains { $0.isRunning } }
 
     func start() {
@@ -67,6 +103,7 @@ final class RunningService: ObservableObject, Identifiable {
         logLinesByCommand = Array(repeating: [], count: config.commands.count)
         commandStates = Array(repeating: .starting, count: config.commands.count)
         startCommandsRan = Set(config.commands.indices)   // all start cmds are being run now
+        startedAt = Date()
         logWriter.reset()
         status = .starting
         stopping = false

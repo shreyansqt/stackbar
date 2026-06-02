@@ -218,10 +218,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         let submenu = NSMenu()
         let live = runner.isLive
-        // While starting/stopping, disable actions so the user can't fire an
-        // overlapping command (e.g. start during a docker-compose-down).
         let busy = runner.isBusy
 
+        // Toggle: Start / Stop, with busy ("Starting…"/"Stopping…") disabled.
         let toggle = NSMenuItem(title: busy ? (live ? "Stopping…" : "Starting…") : (live ? "Stop" : "Start"),
                                 action: busy ? nil : (live ? #selector(stopService(_:)) : #selector(startService(_:))),
                                 keyEquivalent: "")
@@ -230,16 +229,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         toggle.isEnabled = !busy
         submenu.addItem(toggle)
 
-        let restart = NSMenuItem(title: "Restart", action: #selector(restartService(_:)), keyEquivalent: "")
-        restart.target = self
-        restart.representedObject = runner.id
-        restart.isEnabled = !busy
-        submenu.addItem(restart)
-
+        // STATUS section: one-line status (in full label color), plus Open in Browser.
         submenu.addItem(.separator())
-
-        // Open in browser — only meaningful for services that expose a port
-        // (front-ends, dev servers). Enabled only when the service is live.
+        submenu.addItem(sectionHeader("Status"))
+        let statusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        statusItem.attributedTitle = NSAttributedString(string: runner.statusLine, attributes: [
+            .font: NSFont.menuFont(ofSize: 0),
+            .foregroundColor: NSColor.labelColor,   // not the dim disabled grey
+        ])
+        statusItem.image = statusImage(for: runner.status)
+        submenu.addItem(statusItem)
         if runner.config.port != nil {
             let open = NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser(_:)), keyEquivalent: "")
             open.target = self
@@ -248,56 +247,61 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             submenu.addItem(open)
         }
 
-        addLogsItem(to: submenu, for: runner)
+        // START COMMANDS section: each command, enabled once it has logs.
+        submenu.addItem(.separator())
+        submenu.addItem(sectionHeader("Start commands"))
+        for idx in runner.config.commands.indices {
+            let hasLogs = runner.startCommandsRan.contains(idx) && !runner.logLinesByCommand[safe: idx, default: []].isEmpty
+            let entry = commandItem(title: runner.config.commands[idx], hasLogs: hasLogs,
+                                    target: LogTarget(id: runner.id, kind: .start, commandIndex: idx))
+            entry.image = statusImage(for: runner.commandStates[safe: idx, default: .idle])
+            submenu.addItem(entry)
+        }
+
+        // STOP COMMANDS section — only when the service has stop commands.
+        if !runner.config.stopCommands.isEmpty {
+            submenu.addItem(.separator())
+            submenu.addItem(sectionHeader("Stop commands"))
+            for idx in runner.config.stopCommands.indices {
+                let hasLogs = runner.stopCommandsRan.contains(idx) && !runner.stopLogLinesByCommand[safe: idx, default: []].isEmpty
+                let entry = commandItem(title: runner.config.stopCommands[idx], hasLogs: hasLogs,
+                                        target: LogTarget(id: runner.id, kind: .stop, commandIndex: idx))
+                submenu.addItem(entry)
+            }
+        }
 
         item.submenu = submenu
         return item
     }
 
-    /// Build the "View Logs" item. Lists the combined log plus each start/stop
-    /// command that has actually run (un-run commands are hidden). A simple
-    /// single-command service with no run stop commands stays a plain item.
-    private func addLogsItem(to menu: NSMenu, for runner: RunningService) {
-        var entries: [(title: String, target: LogTarget, state: ServiceStatus?)] = []
+    /// A section header drawn in a stronger color than NSMenu's faint default.
+    private func sectionHeader(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.attributedTitle = NSAttributedString(string: title.uppercased(), attributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.secondaryLabelColor,   // stronger than tertiary/disabled
+        ])
+        item.isEnabled = false
+        return item
+    }
 
-        let multiStart = runner.config.commands.count > 1
-        for idx in runner.config.commands.indices where runner.startCommandsRan.contains(idx) {
-            let label = multiStart ? "\(idx + 1) · \(runner.config.commands[idx])" : runner.config.commands[idx]
-            let state = idx < runner.commandStates.count ? runner.commandStates[idx] : nil
-            entries.append((label, LogTarget(id: runner.id, kind: .start, commandIndex: idx), state))
-        }
-        for idx in runner.config.stopCommands.indices where runner.stopCommandsRan.contains(idx) {
-            entries.append(("stop · \(runner.config.stopCommands[idx])",
-                            LogTarget(id: runner.id, kind: .stop, commandIndex: idx), nil))
-        }
+    /// Max characters of a command shown in the menu before truncating (keeps the
+    /// submenu from stretching arbitrarily wide). Full command shown on hover.
+    private static let maxCommandChars = 40
 
-        // Nothing has run yet, or just one start command → a single plain item
-        // pointing at the combined log.
-        if entries.count <= 1 {
-            let logs = NSMenuItem(title: "View Logs", action: #selector(viewLogs(_:)), keyEquivalent: "")
-            logs.target = self
-            logs.representedObject = LogTarget(id: runner.id, kind: .combined, commandIndex: nil)
-            menu.addItem(logs)
-            return
-        }
-
-        let logs = NSMenuItem(title: "View Logs", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        // Combined first.
-        let all = NSMenuItem(title: "All output", action: #selector(viewLogs(_:)), keyEquivalent: "")
-        all.target = self
-        all.representedObject = LogTarget(id: runner.id, kind: .combined, commandIndex: nil)
-        sub.addItem(all)
-        sub.addItem(.separator())
-        for e in entries {
-            let entry = NSMenuItem(title: e.title, action: #selector(viewLogs(_:)), keyEquivalent: "")
-            entry.target = self
-            entry.representedObject = e.target
-            if let state = e.state { entry.image = statusImage(for: state) }
-            sub.addItem(entry)
-        }
-        logs.submenu = sub
-        menu.addItem(logs)
+    /// A command row: truncated label, enabled only when it has logs, full command
+    /// as a tooltip.
+    private func commandItem(title: String, hasLogs: Bool, target: LogTarget) -> NSMenuItem {
+        let shown = title.count > Self.maxCommandChars
+            ? String(title.prefix(Self.maxCommandChars - 1)) + "…"
+            : title
+        let item = NSMenuItem(title: shown,
+                              action: hasLogs ? #selector(viewLogs(_:)) : nil, keyEquivalent: "")
+        item.target = self
+        item.representedObject = target
+        item.isEnabled = hasLogs
+        item.toolTip = title   // full command on hover
+        return item
     }
 
     /// Service name in the normal menu color, with the port appended in a dimmer
@@ -384,6 +388,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
+}
+
+private extension Array {
+    /// Safe index access with a default for out-of-range — keeps menu building
+    /// resilient if status/log arrays momentarily lag the command list.
+    subscript(safe index: Int, default fallback: Element) -> Element {
+        indices.contains(index) ? self[index] : fallback
+    }
 }
 
 /// Identifies which log a menu item opens. Reference type so it rides on an
