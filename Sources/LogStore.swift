@@ -32,6 +32,11 @@ enum LogStore {
         logsDir.appendingPathComponent("\(id.uuidString).\(index).log")
     }
 
+    /// Per-stop-command log file, e.g. `<id>.stop.0.log`.
+    static func stopLogFile(for id: UUID, command index: Int) -> URL {
+        logsDir.appendingPathComponent("\(id.uuidString).stop.\(index).log")
+    }
+
     static func metaFile(for id: UUID) -> URL {
         logsDir.appendingPathComponent("\(id.uuidString).meta.json")
     }
@@ -45,7 +50,8 @@ final class LogFileWriter {
     private let queue: DispatchQueue
     private var handle: FileHandle?
     /// Per-command file handles, keyed by command index.
-    private var commandHandles: [Int: FileHandle] = [:]
+    /// Per-command file handles, keyed "start.<i>" / "stop.<i>".
+    private var namedHandles: [String: FileHandle] = [:]
     private let maxBytes: UInt64 = 5 * 1024 * 1024 // 5 MB, then rotate to .1
 
     init(id: UUID) {
@@ -74,8 +80,8 @@ final class LogFileWriter {
             try? Data().write(to: self.url)
             self.handle = try? FileHandle(forWritingTo: self.url)
             // Clear any per-command files from the previous run.
-            for (_, h) in self.commandHandles { h.closeFile() }
-            self.commandHandles.removeAll()
+            for (_, h) in self.namedHandles { h.closeFile() }
+            self.namedHandles.removeAll()
             let dir = LogStore.logsDir
             let prefix = "\(self.id.uuidString)."
             if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
@@ -95,20 +101,30 @@ final class LogFileWriter {
         }
     }
 
-    /// Append to a specific command's log file.
+    /// Append to a specific start-command's log file.
     func append(_ text: String, commandIndex: Int) {
+        appendToHandle(text, key: "start.\(commandIndex)",
+                       url: LogStore.logFile(for: id, command: commandIndex))
+    }
+
+    /// Append to a specific stop-command's log file.
+    func appendStop(_ text: String, commandIndex: Int) {
+        appendToHandle(text, key: "stop.\(commandIndex)",
+                       url: LogStore.stopLogFile(for: id, command: commandIndex))
+    }
+
+    private func appendToHandle(_ text: String, key: String, url: URL) {
         queue.async {
             let h: FileHandle
-            if let existing = self.commandHandles[commandIndex] {
+            if let existing = self.namedHandles[key] {
                 h = existing
             } else {
-                let url = LogStore.logFile(for: self.id, command: commandIndex)
                 if !FileManager.default.fileExists(atPath: url.path) {
                     FileManager.default.createFile(atPath: url.path, contents: nil)
                 }
                 guard let newHandle = try? FileHandle(forWritingTo: url) else { return }
                 newHandle.seekToEndOfFile()
-                self.commandHandles[commandIndex] = newHandle
+                self.namedHandles[key] = newHandle
                 h = newHandle
             }
             if let data = text.data(using: .utf8) { h.write(data) }

@@ -4,7 +4,7 @@ import SwiftUI
 struct LogWindowView: View {
     @EnvironmentObject var manager: ServiceManager
     let serviceID: UUID?
-    /// If set, show only this command's log; otherwise the combined log.
+    var kind: LogTarget.Kind = .combined
     var commandIndex: Int? = nil
 
     private var runner: RunningService? {
@@ -14,7 +14,7 @@ struct LogWindowView: View {
 
     var body: some View {
         if let runner {
-            LogContent(runner: runner, commandIndex: commandIndex)
+            LogContent(runner: runner, kind: kind, commandIndex: commandIndex)
         } else {
             ContentUnavailableView("Service not found", systemImage: "questionmark.folder")
                 .frame(width: 420, height: 240)
@@ -24,19 +24,27 @@ struct LogWindowView: View {
 
 private struct LogContent: View {
     @ObservedObject var runner: RunningService
+    let kind: LogTarget.Kind
     let commandIndex: Int?
     @State private var autoScroll = true
     @State private var filter = ""
 
-    /// Status to show: the specific command's, or the service's.
+    /// Status to show: the specific start command's, or the service's.
     private var displayStatus: ServiceStatus {
-        if let i = commandIndex, i < runner.commandStates.count { return runner.commandStates[i] }
+        if kind == .start, let i = commandIndex, i < runner.commandStates.count { return runner.commandStates[i] }
         return runner.status
     }
 
     /// Subtitle: the specific command, or all commands.
     private var displayCommand: String {
-        if let i = commandIndex, i < runner.config.commands.count { return runner.config.commands[i] }
+        switch kind {
+        case .start:
+            if let i = commandIndex, i < runner.config.commands.count { return runner.config.commands[i] }
+        case .stop:
+            if let i = commandIndex, i < runner.config.stopCommands.count { return "stop: \(runner.config.stopCommands[i])" }
+        case .combined:
+            break
+        }
         return runner.config.displayCommand
     }
 
@@ -97,10 +105,15 @@ private struct LogContent: View {
             .searchable(text: $filter, placement: .toolbar, prompt: "Filter log")
     }
 
-    /// The source buffer: one command's lines, or the combined log.
+    /// The source buffer: combined, a start command's, or a stop command's lines.
     private var sourceLines: [String] {
-        if let i = commandIndex, i < runner.logLinesByCommand.count {
-            return runner.logLinesByCommand[i]
+        switch kind {
+        case .start:
+            if let i = commandIndex, i < runner.logLinesByCommand.count { return runner.logLinesByCommand[i] }
+        case .stop:
+            if let i = commandIndex, i < runner.stopLogLinesByCommand.count { return runner.stopLogLinesByCommand[i] }
+        case .combined:
+            break
         }
         return runner.logLines
     }

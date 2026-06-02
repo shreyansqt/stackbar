@@ -30,18 +30,27 @@ final class WindowManager {
         window.makeKeyAndOrderFront(nil)
     }
 
-    func openLogs(for id: UUID, commandIndex: Int? = nil) {
+    func openLogs(for id: UUID, kind: LogTarget.Kind = .combined, commandIndex: Int? = nil) {
         guard let runner = manager.runner(id: id) else { return }
         NSApp.activate(ignoringOtherApps: true)
-        let key = commandIndex.map { "\(id.uuidString).\($0)" } ?? id.uuidString
+        let key: String
+        switch kind {
+        case .combined: key = id.uuidString
+        case .start: key = "\(id.uuidString).start.\(commandIndex ?? 0)"
+        case .stop: key = "\(id.uuidString).stop.\(commandIndex ?? 0)"
+        }
         if let existing = logWindows[key] {
             existing.makeKeyAndOrderFront(nil)
             return
         }
-        let root = LogWindowView(serviceID: id, commandIndex: commandIndex).environmentObject(manager)
+        let root = LogWindowView(serviceID: id, kind: kind, commandIndex: commandIndex).environmentObject(manager)
         var title = runner.config.name
-        if let commandIndex, commandIndex < runner.config.commands.count {
-            title += " — \(runner.config.commands[commandIndex])"
+        switch kind {
+        case .combined: break
+        case .start:
+            if let i = commandIndex, i < runner.config.commands.count { title += " — \(runner.config.commands[i])" }
+        case .stop:
+            if let i = commandIndex, i < runner.config.stopCommands.count { title += " — stop: \(runner.config.stopCommands[i])" }
         }
         let window = makeWindow(title: title, content: root,
                                 size: NSSize(width: 720, height: 460))

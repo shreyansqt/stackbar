@@ -98,9 +98,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .crashed:
             image = symbol("exclamationmark.triangle.fill")
         case .allRunning, .idle:
-            // Brightness reflects how many services are running: 30% (none) → 100%
+            // Brightness reflects how many services are running: 40% (none) → 100%
             // (all). allRunning is just the 100% end of this same scale.
-            let alpha = 0.3 + 0.7 * manager.runningFraction
+            let alpha = 0.4 + 0.6 * manager.runningFraction
             image = symbol("rectangle.stack.fill", alpha: alpha)
         case .booting:
             image = nil // handled above
@@ -248,31 +248,56 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             submenu.addItem(open)
         }
 
-        // Logs: a single item for one-command services; a submenu (one entry per
-        // command, each with its own status dot) for multi-command services.
-        if runner.config.commands.count > 1 {
-            let logs = NSMenuItem(title: "View Logs", action: nil, keyEquivalent: "")
-            let logsSub = NSMenu()
-            for (idx, command) in runner.config.commands.enumerated() {
-                let title = "\(idx + 1) · \(command)"
-                let entry = NSMenuItem(title: title, action: #selector(viewLogs(_:)), keyEquivalent: "")
-                entry.target = self
-                entry.representedObject = LogTarget(id: runner.id, commandIndex: idx)
-                let state = idx < runner.commandStates.count ? runner.commandStates[idx] : .idle
-                entry.image = statusImage(for: state)
-                logsSub.addItem(entry)
-            }
-            logs.submenu = logsSub
-            submenu.addItem(logs)
-        } else {
-            let logs = NSMenuItem(title: "View Logs", action: #selector(viewLogs(_:)), keyEquivalent: "")
-            logs.target = self
-            logs.representedObject = LogTarget(id: runner.id, commandIndex: nil)
-            submenu.addItem(logs)
-        }
+        addLogsItem(to: submenu, for: runner)
 
         item.submenu = submenu
         return item
+    }
+
+    /// Build the "View Logs" item. Lists the combined log plus each start/stop
+    /// command that has actually run (un-run commands are hidden). A simple
+    /// single-command service with no run stop commands stays a plain item.
+    private func addLogsItem(to menu: NSMenu, for runner: RunningService) {
+        var entries: [(title: String, target: LogTarget, state: ServiceStatus?)] = []
+
+        let multiStart = runner.config.commands.count > 1
+        for idx in runner.config.commands.indices where runner.startCommandsRan.contains(idx) {
+            let label = multiStart ? "\(idx + 1) · \(runner.config.commands[idx])" : runner.config.commands[idx]
+            let state = idx < runner.commandStates.count ? runner.commandStates[idx] : nil
+            entries.append((label, LogTarget(id: runner.id, kind: .start, commandIndex: idx), state))
+        }
+        for idx in runner.config.stopCommands.indices where runner.stopCommandsRan.contains(idx) {
+            entries.append(("stop · \(runner.config.stopCommands[idx])",
+                            LogTarget(id: runner.id, kind: .stop, commandIndex: idx), nil))
+        }
+
+        // Nothing has run yet, or just one start command → a single plain item
+        // pointing at the combined log.
+        if entries.count <= 1 {
+            let logs = NSMenuItem(title: "View Logs", action: #selector(viewLogs(_:)), keyEquivalent: "")
+            logs.target = self
+            logs.representedObject = LogTarget(id: runner.id, kind: .combined, commandIndex: nil)
+            menu.addItem(logs)
+            return
+        }
+
+        let logs = NSMenuItem(title: "View Logs", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        // Combined first.
+        let all = NSMenuItem(title: "All output", action: #selector(viewLogs(_:)), keyEquivalent: "")
+        all.target = self
+        all.representedObject = LogTarget(id: runner.id, kind: .combined, commandIndex: nil)
+        sub.addItem(all)
+        sub.addItem(.separator())
+        for e in entries {
+            let entry = NSMenuItem(title: e.title, action: #selector(viewLogs(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = e.target
+            if let state = e.state { entry.image = statusImage(for: state) }
+            sub.addItem(entry)
+        }
+        logs.submenu = sub
+        menu.addItem(logs)
     }
 
     /// Service name in the normal menu color, with the port appended in a dimmer
@@ -341,7 +366,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func viewLogs(_ sender: NSMenuItem) {
         guard let target = sender.representedObject as? LogTarget else { return }
-        windows.openLogs(for: target.id, commandIndex: target.commandIndex)
+        windows.openLogs(for: target.id, kind: target.kind, commandIndex: target.commandIndex)
     }
 
     @objc private func openInBrowser(_ sender: NSMenuItem) {
@@ -361,14 +386,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func quit() { NSApp.terminate(nil) }
 }
 
-/// Identifies which log a menu item opens: a whole service (commandIndex nil) or
-/// one command of a multi-command service. Reference type so it rides on an
+/// Identifies which log a menu item opens. Reference type so it rides on an
 /// NSMenuItem's representedObject.
 final class LogTarget: NSObject {
+    enum Kind { case combined, start, stop }
     let id: UUID
+    let kind: Kind
     let commandIndex: Int?
-    init(id: UUID, commandIndex: Int?) {
+    init(id: UUID, kind: Kind, commandIndex: Int?) {
         self.id = id
+        self.kind = kind
         self.commandIndex = commandIndex
     }
 }

@@ -18,6 +18,12 @@ final class RunningService: ObservableObject, Identifiable {
     /// Per-command status, indexed to match `config.commands`, so the UI can show
     /// which specific command is running/crashed in a multi-command service.
     @Published private(set) var commandStates: [ServiceStatus] = []
+    /// Per-stop-command ring buffers, indexed to match `config.stopCommands`.
+    @Published private(set) var stopLogLinesByCommand: [[String]] = []
+    /// Which start/stop commands have actually run at least once — the UI only
+    /// offers a log entry for commands that have been triggered.
+    @Published private(set) var startCommandsRan: Set<Int> = []
+    @Published private(set) var stopCommandsRan: Set<Int> = []
 
     /// One child process per command in `config.commands`.
     private var processes: [Process] = []
@@ -60,6 +66,7 @@ final class RunningService: ObservableObject, Identifiable {
         logLines.removeAll()
         logLinesByCommand = Array(repeating: [], count: config.commands.count)
         commandStates = Array(repeating: .starting, count: config.commands.count)
+        startCommandsRan = Set(config.commands.indices)   // all start cmds are being run now
         logWriter.reset()
         status = .starting
         stopping = false
@@ -217,6 +224,7 @@ final class RunningService: ObservableObject, Identifiable {
         let directory = config.directory
         let stopCommands = config.stopCommands
         let name = config.name
+        stopLogLinesByCommand = Array(repeating: [], count: stopCommands.count)
         append("[stackbar] stopping…\n", index: nil, prefix: "")
         Log.info("[\(name)] running \(stopCommands.count) stop command(s)")
 
@@ -231,8 +239,9 @@ final class RunningService: ObservableObject, Identifiable {
             }
             Log.info("[\(name)] start processes exited; running stop commands")
 
-            for command in stopCommands {
+            for (i, command) in stopCommands.enumerated() {
                 Log.info("[\(name)] stop cmd start: \(command)")
+                Task { @MainActor in self?.markStopCommandRan(i) }
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
                 proc.arguments = ["-lc", command]
@@ -243,9 +252,9 @@ final class RunningService: ObservableObject, Identifiable {
                 pipe.fileHandleForReading.readabilityHandler = { handle in
                     let data = handle.availableData
                     guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                    Task { @MainActor in self?.append(text, index: nil, prefix: "[stop] ") }
+                    Task { @MainActor in self?.appendStop(text, index: i, prefix: "[stop] ") }
                 }
-                Task { @MainActor in self?.append("[stackbar] stop: \(command)\n", index: nil, prefix: "") }
+                Task { @MainActor in self?.appendStop("[stackbar] stop: \(command)\n", index: i, prefix: "") }
                 do {
                     try proc.run()
                 } catch {
@@ -269,6 +278,23 @@ final class RunningService: ObservableObject, Identifiable {
                 self?.append("[stackbar] stopped.\n", index: nil, prefix: "")
             }
         }
+    }
+
+    private func markStopCommandRan(_ index: Int) {
+        stopCommandsRan.insert(index)
+    }
+
+    /// Append stop-command output: to the combined log (prefixed) AND that stop
+    /// command's own buffer + file, so it can be viewed in isolation.
+    private func appendStop(_ text: String, index: Int, prefix: String) {
+        append(text, index: nil, prefix: prefix)   // combined view
+        guard index < stopLogLinesByCommand.count else { return }
+        let raw = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        stopLogLinesByCommand[index].append(contentsOf: raw)
+        if stopLogLinesByCommand[index].count > maxLines {
+            stopLogLinesByCommand[index].removeFirst(stopLogLinesByCommand[index].count - maxLines)
+        }
+        logWriter.appendStop(text, commandIndex: index)
     }
 
     func restart() {
