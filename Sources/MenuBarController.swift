@@ -39,9 +39,60 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func updateIcon() {
         guard let button = statusItem.button else { return }
-        let symbol = manager.overallStatus.menuBarSymbol
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "StackBar")
-        button.image?.isTemplate = true
+        // Resolve the glyph color against the status button's effective appearance
+        // (which reflects the menu bar — white on a dark bar, black on a light one),
+        // NOT the app's appearance. Non-template, so the colored badge survives.
+        let glyphColor = button.effectiveAppearance.resolveLabelColor()
+        button.image = makeStatusImage(badge: manager.badgeStatus, glyphColor: glyphColor)
+        button.image?.isTemplate = false
+    }
+
+    /// Draw the base glyph plus a colored status badge in the top-right corner.
+    private func makeStatusImage(badge: ServiceManager.BadgeStatus, glyphColor: NSColor) -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        let glyph = NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: "StackBar")?
+            .withSymbolConfiguration(config)
+
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let ctx = NSGraphicsContext.current?.cgContext
+
+        // Glyph, tinted to match the menu bar (white on dark, black on light).
+        if let glyph {
+            let gSize = glyph.size
+            let rect = NSRect(x: (size.width - gSize.width) / 2,
+                              y: (size.height - gSize.height) / 2,
+                              width: gSize.width, height: gSize.height)
+            glyph.draw(in: rect)
+            glyphColor.set()
+            rect.fill(using: .sourceAtop)   // tint the just-drawn template glyph
+        }
+
+        // Badge dot, top-right, with a small cleared ring so it reads against the glyph.
+        if let color = badgeColor(badge) {
+            let d: CGFloat = 7
+            let dotRect = NSRect(x: size.width - d, y: size.height - d, width: d, height: d)
+            if let ctx {
+                ctx.setBlendMode(.clear)
+                ctx.fillEllipse(in: dotRect.insetBy(dx: -1.3, dy: -1.3))
+                ctx.setBlendMode(.normal)
+            }
+            color.set()
+            NSBezierPath(ovalIn: dotRect).fill()
+        }
+
+        image.unlockFocus()
+        return image
+    }
+
+    private func badgeColor(_ badge: ServiceManager.BadgeStatus) -> NSColor? {
+        switch badge {
+        case .allRunning: return .systemGreen
+        case .someDown: return .systemOrange
+        case .allDown: return .systemRed
+        case .idle: return .systemGray
+        }
     }
 
     // MARK: - NSMenuDelegate (build fresh each time it opens)
@@ -202,4 +253,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
+}
+
+private extension NSAppearance {
+    /// Resolve labelColor (and thus light/dark) against THIS appearance — used to
+    /// match the glyph to the menu bar rather than the app's own appearance.
+    func resolveLabelColor() -> NSColor {
+        var color = NSColor.labelColor
+        performAsCurrentDrawingAppearance { color = NSColor.labelColor.usingColorSpace(.sRGB) ?? .labelColor }
+        return color
+    }
 }

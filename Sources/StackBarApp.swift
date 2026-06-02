@@ -25,6 +25,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         menuController = MenuBarController(manager: manager)
     }
+
+    /// Stop every running service when the app quits, so we don't orphan dev-server
+    /// subtrees (zsh → pnpm → turbo → workerd) that otherwise linger as zombie
+    /// node/workerd processes eating RAM.
+    func applicationWillTerminate(_ notification: Notification) {
+        manager.terminateAllNow()
+    }
 }
 
 extension ServiceStatus {

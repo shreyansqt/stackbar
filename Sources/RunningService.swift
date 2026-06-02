@@ -63,8 +63,12 @@ final class RunningService: ObservableObject, Identifiable {
 
     private func spawn(_ command: String, prefix: String) {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        proc.arguments = ["-lc", command]
+        // Run the command in its OWN process group/session so we can later kill the
+        // entire subtree (zsh → pnpm → turbo → workerd, etc.) with one group signal.
+        // `perl setpgrp` makes the launched shell a group leader; without this, dev
+        // servers' grandchildren get orphaned when StackBar stops or quits.
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        proc.arguments = ["-e", "setpgrp; exec @ARGV", "/bin/zsh", "-lc", command]
         proc.currentDirectoryURL = URL(fileURLWithPath: config.directory)
 
         // Ask CLIs to emit ANSI color even though stdout is a pipe, not a TTY —
@@ -99,6 +103,19 @@ final class RunningService: ObservableObject, Identifiable {
         }
     }
 
+    /// Synchronous force-kill of the whole process group — used on app quit so no
+    /// subtree is orphaned. SIGTERM the group, then SIGKILL as a backstop.
+    func terminateNow() {
+        for proc in processes where proc.isRunning {
+            let pgid = proc.processIdentifier
+            kill(-pgid, SIGTERM)
+            kill(-pgid, SIGKILL)
+        }
+        // Backstop: tools like Turbo detach their workers (pnpm/workerd re-parent
+        // to launchd), escaping the group signal. Kill whatever holds our port.
+        Self.killProcessOnPort(config.port)
+    }
+
     func stop() {
         stopping = true
         // 1. SIGTERM the start processes (the whole group; dev servers spawn children).
@@ -106,11 +123,34 @@ final class RunningService: ObservableObject, Identifiable {
             kill(-proc.processIdentifier, SIGTERM)
             proc.terminate()
         }
+        // 1b. Backstop for detached workers (Turbo) that escaped the group signal.
+        Self.killProcessOnPort(config.port)
         // 2. Run any stop commands (e.g. `docker compose down`) in order, then idle.
         if config.stopCommands.isEmpty {
             status = .idle
         } else {
             runStopCommands()
+        }
+    }
+
+    /// Kill whatever is listening on `port` (SIGTERM). Catches detached dev-server
+    /// processes that re-parented away from us. No-op if no port is configured.
+    static func killProcessOnPort(_ port: Int?) {
+        guard let port else { return }
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+        let pipe = Pipe()
+        lsof.standardOutput = pipe
+        lsof.standardError = Pipe()
+        guard (try? lsof.run()) != nil else { return }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        lsof.waitUntilExit()
+        guard let out = String(data: data, encoding: .utf8) else { return }
+        for line in out.split(whereSeparator: \.isNewline) {
+            if let pid = Int32(line.trimmingCharacters(in: .whitespaces)) {
+                kill(pid, SIGTERM)
+            }
         }
     }
 

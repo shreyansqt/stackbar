@@ -38,6 +38,27 @@ final class ServiceManager: ObservableObject {
         return .idle
     }
 
+    /// Badge shown on the menu bar glyph.
+    enum BadgeStatus {
+        case allRunning   // green  — every service is up
+        case someDown     // orange — at least one up, at least one not
+        case allDown      // red    — none up and at least one crashed
+        case idle         // gray   — nothing running, nothing crashed
+    }
+
+    var badgeStatus: BadgeStatus {
+        guard !runners.isEmpty else { return .idle }
+        let total = runners.count
+        let running = runners.filter { if case .running = $0.status { return true } else { return false } }.count
+        let crashed = runners.filter { if case .crashed = $0.status { return true } else { return false } }.count
+
+        if running == total { return .allRunning }
+        if running > 0 { return .someDown }
+        // none running:
+        if crashed > 0 { return .allDown }
+        return .idle
+    }
+
     // MARK: - CRUD
 
     func addService(_ service: Service) {
@@ -68,6 +89,12 @@ final class ServiceManager: ObservableObject {
 
     func runner(id: UUID) -> RunningService? {
         runners.first { $0.id == id }
+    }
+
+    /// Force-kill every running service's process group immediately, synchronously.
+    /// Called on app termination so no dev-server subtrees are left orphaned.
+    func terminateAllNow() {
+        runners.forEach { $0.terminateNow() }
     }
 
     /// Resolve by exact id string, exact name, or partial name (case-insensitive).
