@@ -8,97 +8,138 @@ struct SettingsView: View {
     @State private var draft = Draft()
 
     var body: some View {
-        HSplitView {
-            list
-                .frame(minWidth: 180, maxWidth: 220)
+        NavigationSplitView {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
+        } detail: {
             editor
-                .frame(minWidth: 360)
         }
-        .frame(minHeight: 320)
+        .frame(minWidth: 640, minHeight: 440)
         .onChange(of: selection) { _, newValue in loadDraft(for: newValue) }
     }
 
-    private var list: some View {
-        VStack(spacing: 0) {
-            List(selection: $selection) {
+    // MARK: - Sidebar
+
+    private var sidebar: some View {
+        List(selection: $selection) {
+            Section("Services") {
                 ForEach(manager.runners) { runner in
-                    HStack {
+                    HStack(spacing: 8) {
                         StatusDot(status: runner.status)
-                        Text(runner.config.name)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(runner.config.name)
+                                .lineLimit(1)
+                            if let port = runner.config.port {
+                                Text("localhost:\(port)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
+                    .padding(.vertical, 2)
                     .tag(runner.id)
                 }
             }
-            HStack {
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) {
+            HStack(spacing: 2) {
                 Button { newService() } label: { Image(systemName: "plus") }
+                    .help("Add service")
                 Button { deleteSelected() } label: { Image(systemName: "minus") }
+                    .help("Remove service")
                     .disabled(selection == nil)
                 Spacer()
             }
             .buttonStyle(.borderless)
-            .padding(6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.bar)
         }
     }
 
+    // MARK: - Editor
+
     private var editor: some View {
         Form {
-            TextField("Name", text: $draft.name)
-
-            HStack {
-                TextField("Directory", text: $draft.directory)
-                Button("Choose…") { chooseDirectory() }
+            Section {
+                TextField("Name", text: $draft.name, prompt: Text("e.g. smarta-banking"))
+                LabeledContent("Directory") {
+                    HStack {
+                        Text(draft.directory.isEmpty ? "No folder chosen" : draft.directory)
+                            .foregroundStyle(draft.directory.isEmpty ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Choose…") { chooseDirectory() }
+                    }
+                }
+                TextField("Port", text: $draft.portText, prompt: Text("optional, e.g. 3000"))
             }
 
-            Section("Commands") {
+            Section("Start commands") {
                 ForEach(draft.commands.indices, id: \.self) { i in
-                    HStack {
-                        TextField("Command \(draft.commands.count > 1 ? "\(i + 1)" : "")",
-                                  text: $draft.commands[i],
-                                  prompt: Text("e.g. yarn start"))
-                            .font(.system(.body, design: .monospaced))
-                        if draft.commands.count > 1 {
-                            Button { draft.commands.remove(at: i) } label: {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.borderless)
-                        }
+                    commandRow(text: $draft.commands[i],
+                               placeholder: "e.g. yarn dev",
+                               canRemove: draft.commands.count > 1) {
+                        draft.commands.remove(at: i)
                     }
                 }
-                Button { draft.commands.append("") } label: {
-                    Label("Add command", systemImage: "plus")
-                }
-                .buttonStyle(.borderless)
+                addButton("Add command") { draft.commands.append("") }
             }
 
-            Section("Stop commands (optional)") {
+            Section {
                 ForEach(draft.stopCommands.indices, id: \.self) { i in
-                    HStack {
-                        TextField("Stop command", text: $draft.stopCommands[i],
-                                  prompt: Text("e.g. docker compose down"))
-                            .font(.system(.body, design: .monospaced))
-                        Button { draft.stopCommands.remove(at: i) } label: {
-                            Image(systemName: "minus.circle")
-                        }
-                        .buttonStyle(.borderless)
+                    commandRow(text: $draft.stopCommands[i],
+                               placeholder: "e.g. docker compose down",
+                               canRemove: true) {
+                        draft.stopCommands.remove(at: i)
                     }
                 }
-                Button { draft.stopCommands.append("") } label: {
-                    Label("Add stop command", systemImage: "plus")
-                }
-                .buttonStyle(.borderless)
+                addButton("Add stop command") { draft.stopCommands.append("") }
+            } header: {
+                Text("Stop commands")
+            } footer: {
+                Text("Run on stop, after the start processes are terminated. Optional.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-
-            TextField("Port (optional)", text: $draft.portText,
-                      prompt: Text("e.g. 3000"))
-
-            HStack {
-                Spacer()
-                Button("Save") { save() }
+        }
+        .formStyle(.grouped)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button(selection == nil ? "Add" : "Save") { save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!draft.isValid)
             }
         }
-        .padding(16)
+    }
+
+    private func commandRow(text: Binding<String>, placeholder: String,
+                            canRemove: Bool, remove: @escaping () -> Void) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "terminal")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            TextField("", text: text, prompt: Text(placeholder))
+                .font(.system(.body, design: .monospaced))
+                .textFieldStyle(.plain)
+            if canRemove {
+                Button(role: .destructive) { remove() } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private func addButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: "plus.circle")
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
     }
 
     // MARK: - Actions

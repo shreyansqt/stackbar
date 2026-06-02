@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Live log tail for a single service.
+/// Live log tail for a single service, styled as a console pane.
 struct LogWindowView: View {
     @EnvironmentObject var manager: ServiceManager
     let serviceID: UUID?
@@ -13,11 +13,9 @@ struct LogWindowView: View {
     var body: some View {
         if let runner {
             LogContent(runner: runner)
-                .navigationTitle("\(runner.config.name) — logs")
         } else {
-            Text("Service not found")
-                .foregroundStyle(.secondary)
-                .frame(width: 400, height: 200)
+            ContentUnavailableView("Service not found", systemImage: "questionmark.folder")
+                .frame(width: 420, height: 240)
         }
     }
 }
@@ -25,50 +23,78 @@ struct LogWindowView: View {
 private struct LogContent: View {
     @ObservedObject var runner: RunningService
     @State private var autoScroll = true
+    @State private var filter = ""
 
-    var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-            Divider()
-            logScroll
-        }
-        .frame(minWidth: 560, minHeight: 360)
+    private var lines: [(offset: Int, line: String)] {
+        let all = Array(runner.logLines.enumerated()).map { (offset: $0.offset, line: $0.element) }
+        guard !filter.isEmpty else { return all }
+        return all.filter { $0.line.localizedCaseInsensitiveContains(filter) }
     }
 
-    private var toolbar: some View {
-        HStack {
-            StatusDot(status: runner.status)
-            Text(runner.config.displayCommand)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer()
-            Toggle("Auto-scroll", isOn: $autoScroll)
-                .toggleStyle(.checkbox)
-            Button { runner.restart() } label: { Image(systemName: "arrow.clockwise") }
+    var body: some View {
+        NavigationStack {
+            console
+                .frame(minWidth: 600, minHeight: 380)
+                .toolbar { toolbarContent }
+                .navigationTitle(runner.config.name)
+                .navigationSubtitle(runner.status.label)
+        }
+    }
+
+    // MARK: - Toolbar
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            HStack(spacing: 6) {
+                StatusDot(status: runner.status)
+                Text(runner.config.displayCommand)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
+            Toggle(isOn: $autoScroll) {
+                Image(systemName: "arrow.down.to.line")
+            }
+            .help("Auto-scroll")
+
+            Button { runner.restart() } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .help("Restart")
+
             Button { runner.isLive ? runner.stop() : runner.start() } label: {
                 Image(systemName: runner.isLive ? "stop.fill" : "play.fill")
             }
+            .help(runner.isLive ? "Stop" : "Start")
         }
-        .buttonStyle(.borderless)
-        .padding(8)
     }
 
-    private var logScroll: some View {
+    // MARK: - Console
+
+    private var console: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(runner.logLines.enumerated()), id: \.offset) { idx, line in
-                        Text(line)
-                            .font(.system(size: 11, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(idx)
+                    ForEach(lines, id: \.offset) { item in
+                        LogLine(number: item.offset + 1, text: item.line)
+                            .id(item.offset)
                     }
                 }
-                .padding(8)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Color(nsColor: .textBackgroundColor))
+            .overlay(alignment: .center) {
+                if lines.isEmpty {
+                    Text(filter.isEmpty ? "No output yet" : "No lines match “\(filter)”")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                }
+            }
             .onChange(of: runner.logLines.count) { _, count in
                 guard autoScroll, count > 0 else { return }
                 withAnimation(.linear(duration: 0.1)) {
@@ -76,5 +102,44 @@ private struct LogContent: View {
                 }
             }
         }
+        .searchable(text: $filter, placement: .toolbar, prompt: "Filter log")
+    }
+}
+
+/// One console line: a dim gutter line-number + the monospaced text.
+private struct LogLine: View {
+    let number: Int
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(number)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 40, alignment: .trailing)
+                .textSelection(.disabled)
+            Text(text.isEmpty ? " " : text)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(lineColor)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 0.5)
+    }
+
+    /// Tint obvious error/warn lines so they stand out in the console.
+    private var lineColor: Color {
+        let lower = text.lowercased()
+        if lower.contains("error") || lower.contains("✘") || lower.contains("fatal") {
+            return .red
+        }
+        if lower.contains("warn") {
+            return .orange
+        }
+        if text.hasPrefix("[stackbar]") || text.hasPrefix("[stop]") {
+            return .secondary
+        }
+        return .primary
     }
 }

@@ -23,7 +23,7 @@ final class WindowManager {
         }
         let root = SettingsView().environmentObject(manager)
         let window = makeWindow(title: "Services", content: root,
-                                size: NSSize(width: 620, height: 420))
+                                size: NSSize(width: 660, height: 460))
         window.delegate = closeObserver
         settingsWindow = window
         window.makeKeyAndOrderFront(nil)
