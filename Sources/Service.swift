@@ -4,19 +4,56 @@ import Foundation
 struct Service: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var name: String
-    /// Working directory the command runs in. Absolute path.
+    /// Working directory the commands run in. Absolute path.
     var directory: String
-    /// Shell command, run via `/bin/zsh -lc`.
-    var command: String
+    /// One or more shell commands, each run via `/bin/zsh -lc` as its own
+    /// child process. A service with two commands (e.g. a transpile watcher +
+    /// a docker compose up) starts/stops them together.
+    var commands: [String]
     /// TCP port to probe for "is it actually up". nil = process-alive only.
     var port: Int?
 
-    init(id: UUID = UUID(), name: String, directory: String, command: String, port: Int? = nil) {
+    init(id: UUID = UUID(), name: String, directory: String, commands: [String], port: Int? = nil) {
         self.id = id
         self.name = name
         self.directory = directory
-        self.command = command
+        self.commands = commands
         self.port = port
+    }
+
+    init(id: UUID = UUID(), name: String, directory: String, command: String, port: Int? = nil) {
+        self.init(id: id, name: name, directory: directory, commands: [command], port: port)
+    }
+
+    /// Display string joining all commands.
+    var displayCommand: String { commands.joined(separator: "  &&  ") }
+
+    // Backward/forward compatible coding: accept either `commands: [...]`
+    // (new) or `command: "..."` (old single-command configs).
+    enum CodingKeys: String, CodingKey { case id, name, directory, commands, command, port }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        directory = try c.decode(String.self, forKey: .directory)
+        port = try c.decodeIfPresent(Int.self, forKey: .port)
+        if let cmds = try c.decodeIfPresent([String].self, forKey: .commands) {
+            commands = cmds
+        } else if let single = try c.decodeIfPresent(String.self, forKey: .command) {
+            commands = [single]
+        } else {
+            commands = []
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(directory, forKey: .directory)
+        try c.encode(commands, forKey: .commands)
+        try c.encodeIfPresent(port, forKey: .port)
     }
 }
 

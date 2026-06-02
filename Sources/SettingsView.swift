@@ -49,9 +49,26 @@ struct SettingsView: View {
                 Button("Choose…") { chooseDirectory() }
             }
 
-            TextField("Command", text: $draft.command,
-                      prompt: Text("e.g. yarn start"))
-                .font(.system(.body, design: .monospaced))
+            Section("Commands") {
+                ForEach(draft.commands.indices, id: \.self) { i in
+                    HStack {
+                        TextField("Command \(draft.commands.count > 1 ? "\(i + 1)" : "")",
+                                  text: $draft.commands[i],
+                                  prompt: Text("e.g. yarn start"))
+                            .font(.system(.body, design: .monospaced))
+                        if draft.commands.count > 1 {
+                            Button { draft.commands.remove(at: i) } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+                Button { draft.commands.append("") } label: {
+                    Label("Add command", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+            }
 
             TextField("Port (optional)", text: $draft.portText,
                       prompt: Text("e.g. 3000"))
@@ -80,13 +97,16 @@ struct SettingsView: View {
 
     private func save() {
         let port = Int(draft.portText.trimmingCharacters(in: .whitespaces))
+        let commands = draft.commands
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
         if let id = selection {
             manager.updateService(Service(id: id, name: draft.name,
                                           directory: draft.directory,
-                                          command: draft.command, port: port))
+                                          commands: commands, port: port))
         } else {
             let service = Service(name: draft.name, directory: draft.directory,
-                                  command: draft.command, port: port)
+                                  commands: commands, port: port)
             manager.addService(service)
             selection = service.id
         }
@@ -114,7 +134,7 @@ struct SettingsView: View {
 private struct Draft {
     var name = ""
     var directory = ""
-    var command = ""
+    var commands: [String] = [""]
     var portText = ""
 
     init() {}
@@ -122,13 +142,13 @@ private struct Draft {
     init(from service: Service) {
         name = service.name
         directory = service.directory
-        command = service.command
+        commands = service.commands.isEmpty ? [""] : service.commands
         portText = service.port.map(String.init) ?? ""
     }
 
     var isValid: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty &&
         !directory.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !command.trimmingCharacters(in: .whitespaces).isEmpty
+        commands.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 }

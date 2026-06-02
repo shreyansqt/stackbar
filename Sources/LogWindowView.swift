@@ -38,7 +38,7 @@ private struct LogContent: View {
     private var toolbar: some View {
         HStack {
             StatusDot(status: runner.status)
-            Text(runner.config.command)
+            Text(runner.config.displayCommand)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

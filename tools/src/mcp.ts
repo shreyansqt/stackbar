@@ -74,27 +74,27 @@ server.tool(
 
 server.tool(
   "add_service",
-  "Add a new service to StackBar. The directory must be an absolute path; the command is run via zsh in that directory.",
+  "Add a new service to StackBar. The directory must be an absolute path. Pass one or more commands; each runs via zsh in that directory as its own child process, all started/stopped together (e.g. a transpile watcher + a docker compose up).",
   {
     name: z.string(),
-    directory: z.string().describe("Absolute path the command runs in"),
-    command: z.string().describe("Shell command, e.g. 'yarn dev'"),
+    directory: z.string().describe("Absolute path the commands run in"),
+    commands: z.array(z.string()).min(1).describe("Shell commands, e.g. ['yarn transpile-watch', 'yarn up']"),
     port: z.number().int().positive().optional().describe("TCP port to probe for health"),
   },
   (args) => withApp(async () => {
     const r = await api.add(args);
-    return text(`Added "${args.name}" (id ${r.id}).`);
+    return text(`Added "${args.name}" (id ${r.id}) with ${args.commands.length} command(s).`);
   })
 );
 
 server.tool(
   "edit_service",
-  "Edit an existing service. Only the fields you pass are changed.",
+  "Edit an existing service. Only the fields you pass are changed. Passing `commands` replaces the full command list.",
   {
     service: z.string().describe("Service name/id to edit"),
     name: z.string().optional(),
     directory: z.string().optional(),
-    command: z.string().optional(),
+    commands: z.array(z.string()).min(1).optional().describe("Replacement command list"),
     port: z.number().int().positive().nullable().optional().describe("New port, or null to clear"),
   },
   ({ service, ...patch }) => withApp(async () => {

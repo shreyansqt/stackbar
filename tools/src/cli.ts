@@ -11,6 +11,16 @@ function flag(name: string, short?: string): string | undefined {
   const i = args.findIndex((a) => a === `--${name}` || (short && a === `-${short}`));
   return i >= 0 ? args[i + 1] : undefined;
 }
+/** All values of a flag that may be repeated (e.g. multiple --cmd). */
+function flagAll(name: string, short?: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === `--${name}` || (short && args[i] === `-${short}`)) {
+      if (args[i + 1] !== undefined) out.push(args[i + 1]);
+    }
+  }
+  return out;
+}
 function hasFlag(name: string, short?: string): boolean {
   return args.includes(`--${name}`) || (short ? args.includes(`-${short}`) : false);
 }
@@ -67,23 +77,25 @@ async function cmdList() {
     const dot = DOT[s.status] ?? "🔴";
     const port = s.port ? ` :${s.port}` : "";
     console.log(`${dot} ${s.name}${port}  (${s.status})`);
-    console.log(`     ${s.command}  [${s.directory}]`);
+    const cmds = s.commands ?? [s.command];
+    for (const c of cmds) console.log(`     $ ${c}`);
+    console.log(`     [${s.directory}]`);
   }
 }
 
 async function cmdAdd() {
   const name = args[1];
   const dir = flag("dir", "d");
-  const command = flag("cmd", "c");
+  const commands = flagAll("cmd", "c");
   const portStr = flag("port", "p");
-  if (!name || !dir || !command) {
-    console.error("usage: stackbar add <name> --dir <path> --cmd <command> [--port N]");
+  if (!name || !dir || commands.length === 0) {
+    console.error("usage: stackbar add <name> --dir <path> --cmd <command> [--cmd <command2> ...] [--port N]");
     process.exit(1);
   }
   const r = await api.add({
     name,
     directory: dir,
-    command,
+    commands,
     port: portStr ? parseInt(portStr, 10) : undefined,
   });
   console.log(`Added "${name}" (${r.id})`);
@@ -98,11 +110,11 @@ async function cmdEdit() {
   const patch: Record<string, unknown> = {};
   const name = flag("name");
   const dir = flag("dir", "d");
-  const command = flag("cmd", "c");
+  const commands = flagAll("cmd", "c");
   const portStr = flag("port", "p");
   if (name !== undefined) patch.name = name;
   if (dir !== undefined) patch.directory = dir;
-  if (command !== undefined) patch.command = command;
+  if (commands.length > 0) patch.commands = commands;
   if (portStr !== undefined) patch.port = portStr === "" ? null : parseInt(portStr, 10);
   if (Object.keys(patch).length === 0) {
     console.error("nothing to change; pass --name/--dir/--cmd/--port");
@@ -200,8 +212,9 @@ function usage() {
 
 Services:
   stackbar list                                    List services + live status
-  stackbar add <name> --dir P --cmd C [--port N]   Add a service
+  stackbar add <name> --dir P --cmd C [--cmd C2 ...] [--port N]   Add a service
   stackbar edit <service> [--name|--dir|--cmd|--port ...]   Edit a service
+                                                   (repeat --cmd for multiple commands)
   stackbar remove <service>                        Remove a service
 
 Actions:

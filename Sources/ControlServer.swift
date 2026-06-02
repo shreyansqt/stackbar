@@ -120,15 +120,22 @@ final class ControlServer {
         return .json(["error": "not found", "path": req.path], status: 404)
     }
 
+    /// Accept either `commands: [String]` or a single `command: String`.
+    private func extractCommands(_ body: [String: Any]) -> [String]? {
+        if let cmds = body["commands"] as? [String], !cmds.isEmpty { return cmds }
+        if let single = body["command"] as? String { return [single] }
+        return nil
+    }
+
     private func addService(_ req: HTTPRequest) -> HTTPResponse {
         guard let body = req.jsonBody,
               let name = body["name"] as? String,
               let directory = body["directory"] as? String,
-              let command = body["command"] as? String else {
-            return .json(["error": "name, directory, command required"], status: 400)
+              let commands = extractCommands(body) else {
+            return .json(["error": "name, directory, and command(s) required"], status: 400)
         }
         let port = body["port"] as? Int
-        let service = Service(name: name, directory: directory, command: command, port: port)
+        let service = Service(name: name, directory: directory, commands: commands, port: port)
         manager.addService(service)
         return .json(["ok": true, "id": service.id.uuidString])
     }
@@ -141,7 +148,7 @@ final class ControlServer {
             id: old.id,
             name: body["name"] as? String ?? old.name,
             directory: body["directory"] as? String ?? old.directory,
-            command: body["command"] as? String ?? old.command,
+            commands: extractCommands(body) ?? old.commands,
             port: body.keys.contains("port") ? (body["port"] as? Int) : old.port
         )
         manager.updateService(updated)

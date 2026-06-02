@@ -50,7 +50,7 @@ final class LogFileWriter {
         let meta: [String: String] = [
             "id": service.id.uuidString,
             "name": service.name,
-            "command": service.command,
+            "command": service.displayCommand,
             "directory": service.directory,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted]) else { return }
