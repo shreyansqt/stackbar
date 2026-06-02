@@ -21,5 +21,6 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Shreyans Jain <hi@shreyans.co> (https://shreyans.co)"
 }

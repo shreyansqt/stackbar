@@ -2,11 +2,13 @@
 
 A lightweight native macOS menu bar app for running and monitoring your local dev
 services — start/stop/restart each process, see at a glance whether it's healthy
-(process alive + TCP port open), and read its logs. Built in Swift with SwiftUI's
-`MenuBarExtra`, no Dock icon (`LSUIElement`).
+(process alive + TCP port open), and read its logs. Built in Swift with AppKit
+(`NSStatusItem` + `NSMenu`) and SwiftUI, no Dock icon (`LSUIElement`).
 
 Ships with a CLI and an MCP server so Claude Code sessions (or any terminal) can
-read service logs on demand.
+control services and read their logs on demand.
+
+By [Shreyans Jain](https://shreyans.co) · hi@shreyans.co
 
 ## Layout
 
@@ -90,6 +92,10 @@ Tools exposed: `list_services`, `get_logs`, `search_logs`.
 V1. Health = process alive + TCP port check. Logs are captured to disk and shown
 live in-app. No dependency ordering between services yet (planned).
 
+## Author
+
+[Shreyans Jain](https://shreyans.co) — hi@shreyans.co
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Shreyans Jain.
