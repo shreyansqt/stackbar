@@ -1,0 +1,24 @@
+{
+  "name": "stackbar-tools",
+  "version": "1.0.0",
+  "description": "CLI and MCP server for reading StackBar service logs",
+  "type": "module",
+  "bin": {
+    "stackbar": "dist/cli.js",
+    "stackbar-mcp": "dist/mcp.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev:cli": "tsx src/cli.ts",
+    "dev:mcp": "tsx src/mcp.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

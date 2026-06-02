@@ -1,0 +1,13 @@
+# Xcode / build
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# XcodeGen generates this from project.yml
+StackBar.xcodeproj/
+
+# Node tools
+tools/node_modules/
+tools/dist/
