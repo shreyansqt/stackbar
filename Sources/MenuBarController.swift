@@ -132,7 +132,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         )
         if let port {
             title.append(NSAttributedString(
-                string: "   :\(port)",
+                string: "   \(port)",
                 attributes: [
                     .font: NSFont.monospacedDigitSystemFont(ofSize: menuFont.pointSize - 1, weight: .regular),
                     .foregroundColor: NSColor.tertiaryLabelColor,
