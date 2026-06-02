@@ -89,3 +89,7 @@ Tools exposed: `list_services`, `get_logs`, `search_logs`.
 
 V1. Health = process alive + TCP port check. Logs are captured to disk and shown
 live in-app. No dependency ordering between services yet (planned).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
