@@ -53,6 +53,14 @@ final class ServiceManager: ObservableObject {
         case crashed      // something errored — exclamation triangle
     }
 
+    /// Fraction of services fully running (0…1). Drives the glyph's brightness
+    /// when nothing is crashing or transitioning. 0 if there are no services.
+    var runningFraction: Double {
+        guard !runners.isEmpty else { return 0 }
+        let running = runners.filter { if case .running = $0.status { return true } else { return false } }.count
+        return Double(running) / Double(runners.count)
+    }
+
     var iconState: IconState {
         let statuses = runners.map(\.status)
         if statuses.contains(where: { if case .crashed = $0 { return true } else { return false } }) {

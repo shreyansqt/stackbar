@@ -97,10 +97,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         switch state {
         case .crashed:
             image = symbol("exclamationmark.triangle.fill")
-        case .allRunning:
-            image = symbol("rectangle.stack.fill")
-        case .idle:
-            image = symbol("rectangle.stack.fill", alpha: 0.4)
+        case .allRunning, .idle:
+            // Brightness reflects how many services are running: 30% (none) → 100%
+            // (all). allRunning is just the 100% end of this same scale.
+            let alpha = 0.3 + 0.7 * manager.runningFraction
+            image = symbol("rectangle.stack.fill", alpha: alpha)
         case .booting:
             image = nil // handled above
         }

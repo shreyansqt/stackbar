@@ -140,6 +140,9 @@ final class RunningService: ObservableObject, Identifiable {
     func stop() {
         Log.info("[\(config.name)] stop requested")
         stopping = true
+        // Show the stopping state immediately (menu bar spinner, disabled buttons)
+        // for the whole teardown — including the wait + stop commands below.
+        if !config.stopCommands.isEmpty { status = .stopping }
         // 1. SIGTERM the start processes (the whole group; dev servers spawn children).
         for proc in processes where proc.isRunning {
             kill(-proc.processIdentifier, SIGTERM)
@@ -341,7 +344,12 @@ final class RunningService: ObservableObject, Identifiable {
         // a crash. Stay idle, and ignore the codes entirely.
         if stopping {
             if index < commandStates.count { commandStates[index] = .idle }
-            if terminatedCount >= launchedCount { status = .idle; stopping = false }
+            // If stop commands will run (or are running), keep the stopping state —
+            // runStopCommands() owns the transition to idle when it finishes.
+            if terminatedCount >= launchedCount && config.stopCommands.isEmpty {
+                status = .idle
+                stopping = false
+            }
             return
         }
         // A command died on its own. Record which command, and mark the service
