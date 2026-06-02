@@ -68,6 +68,7 @@ export interface ServiceStatus {
   directory: string;
   command: string;
   commands: string[];
+  stopCommands: string[];
   port: number | null;
   status: string;
   live: boolean;
@@ -76,8 +77,13 @@ export interface ServiceStatus {
 export const api = {
   list: (): Promise<ServiceStatus[]> =>
     call("GET", "/services").then((r) => r.services as ServiceStatus[]),
-  add: (s: { name: string; directory: string; commands: string[]; port?: number }) =>
-    call("POST", "/services", s),
+  add: (s: {
+    name: string;
+    directory: string;
+    commands: string[];
+    stopCommands?: string[];
+    port?: number;
+  }) => call("POST", "/services", s),
   edit: (idOrName: string, patch: Record<string, unknown>) =>
     call("PATCH", `/services/${encodeURIComponent(idOrName)}`, patch),
   remove: (idOrName: string) =>

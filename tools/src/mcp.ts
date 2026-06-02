@@ -48,7 +48,7 @@ server.tool(
 
 server.tool(
   "stop_service",
-  "Stop a running StackBar service (or 'all'). Sends SIGTERM to the process group.",
+  "Stop a running StackBar service (or 'all'). SIGTERMs the start processes, then runs the service's stop commands (e.g. docker compose down) if configured.",
   { service: z.string().describe("Service name/id, or 'all'") },
   ({ service }) =>
     withApp(async () => {
@@ -79,6 +79,8 @@ server.tool(
     name: z.string(),
     directory: z.string().describe("Absolute path the commands run in"),
     commands: z.array(z.string()).min(1).describe("Shell commands, e.g. ['yarn transpile-watch', 'yarn up']"),
+    stopCommands: z.array(z.string()).optional()
+      .describe("Optional commands run on stop, after the start processes are SIGTERM'd, e.g. ['docker compose down']"),
     port: z.number().int().positive().optional().describe("TCP port to probe for health"),
   },
   (args) => withApp(async () => {
@@ -95,6 +97,7 @@ server.tool(
     name: z.string().optional(),
     directory: z.string().optional(),
     commands: z.array(z.string()).min(1).optional().describe("Replacement command list"),
+    stopCommands: z.array(z.string()).optional().describe("Replacement stop-command list (e.g. ['docker compose down'])"),
     port: z.number().int().positive().nullable().optional().describe("New port, or null to clear"),
   },
   ({ service, ...patch }) => withApp(async () => {

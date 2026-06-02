@@ -93,24 +93,68 @@ final class RunningService: ObservableObject, Identifiable {
     }
 
     func stop() {
-        guard anyRunning else {
-            status = .idle
-            return
-        }
         stopping = true
+        // 1. SIGTERM the start processes (the whole group; dev servers spawn children).
         for proc in processes where proc.isRunning {
-            // SIGTERM the whole process group; dev servers spawn children.
             kill(-proc.processIdentifier, SIGTERM)
             proc.terminate()
         }
-        status = .idle
+        // 2. Run any stop commands (e.g. `docker compose down`) in order, then idle.
+        if config.stopCommands.isEmpty {
+            status = .idle
+        } else {
+            runStopCommands()
+        }
+    }
+
+    /// Run stopCommands sequentially on a background queue (each may block, e.g.
+    /// docker teardown), streaming output into the log. Status -> idle when done.
+    private func runStopCommands() {
+        status = .stopping
+        let directory = config.directory
+        let stopCommands = config.stopCommands
+        append("[stackbar] stopping…\n", prefix: "")
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for command in stopCommands {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                proc.arguments = ["-lc", command]
+                proc.currentDirectoryURL = URL(fileURLWithPath: directory)
+                let pipe = Pipe()
+                proc.standardOutput = pipe
+                proc.standardError = pipe
+                pipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                    Task { @MainActor in self?.append(text, prefix: "[stop] ") }
+                }
+                Task { @MainActor in self?.append("[stackbar] stop: \(command)\n", prefix: "") }
+                try? proc.run()
+                proc.waitUntilExit()
+                pipe.fileHandleForReading.readabilityHandler = nil
+            }
+            Task { @MainActor in
+                self?.status = .idle
+                self?.stopping = false
+                self?.append("[stackbar] stopped.\n", prefix: "")
+            }
+        }
     }
 
     func restart() {
         stop()
-        // Give the OS a beat to release the port before relaunching.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.start()
+        // Wait long enough for stop commands (e.g. docker down) to finish and
+        // the port to be released before relaunching.
+        let delay = config.stopCommands.isEmpty ? 0.6 : 2.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            // If stop commands are still running, defer until idle.
+            if case .stopping = self.status {
+                self.restart()
+            } else {
+                self.start()
+            }
         }
     }
 

@@ -64,6 +64,7 @@ async function main() {
 const DOT: Record<string, string> = {
   running: "🟢",
   starting: "🟡",
+  stopping: "🟡",
   idle: "⚪️",
 };
 
@@ -79,6 +80,7 @@ async function cmdList() {
     console.log(`${dot} ${s.name}${port}  (${s.status})`);
     const cmds = s.commands ?? [s.command];
     for (const c of cmds) console.log(`     $ ${c}`);
+    for (const c of s.stopCommands ?? []) console.log(`     ⏹ ${c}`);
     console.log(`     [${s.directory}]`);
   }
 }
@@ -87,15 +89,17 @@ async function cmdAdd() {
   const name = args[1];
   const dir = flag("dir", "d");
   const commands = flagAll("cmd", "c");
+  const stopCommands = flagAll("stop-cmd");
   const portStr = flag("port", "p");
   if (!name || !dir || commands.length === 0) {
-    console.error("usage: stackbar add <name> --dir <path> --cmd <command> [--cmd <command2> ...] [--port N]");
+    console.error("usage: stackbar add <name> --dir <path> --cmd <command> [--cmd <c2> ...] [--stop-cmd <c> ...] [--port N]");
     process.exit(1);
   }
   const r = await api.add({
     name,
     directory: dir,
     commands,
+    stopCommands: stopCommands.length ? stopCommands : undefined,
     port: portStr ? parseInt(portStr, 10) : undefined,
   });
   console.log(`Added "${name}" (${r.id})`);
@@ -111,10 +115,12 @@ async function cmdEdit() {
   const name = flag("name");
   const dir = flag("dir", "d");
   const commands = flagAll("cmd", "c");
+  const stopCommands = flagAll("stop-cmd");
   const portStr = flag("port", "p");
   if (name !== undefined) patch.name = name;
   if (dir !== undefined) patch.directory = dir;
   if (commands.length > 0) patch.commands = commands;
+  if (stopCommands.length > 0) patch.stopCommands = stopCommands;
   if (portStr !== undefined) patch.port = portStr === "" ? null : parseInt(portStr, 10);
   if (Object.keys(patch).length === 0) {
     console.error("nothing to change; pass --name/--dir/--cmd/--port");
@@ -212,9 +218,9 @@ function usage() {
 
 Services:
   stackbar list                                    List services + live status
-  stackbar add <name> --dir P --cmd C [--cmd C2 ...] [--port N]   Add a service
-  stackbar edit <service> [--name|--dir|--cmd|--port ...]   Edit a service
-                                                   (repeat --cmd for multiple commands)
+  stackbar add <name> --dir P --cmd C [--cmd C2 ...] [--stop-cmd S ...] [--port N]
+  stackbar edit <service> [--name|--dir|--cmd|--stop-cmd|--port ...]   Edit a service
+                                                   (repeat --cmd / --stop-cmd for multiple)
   stackbar remove <service>                        Remove a service
 
 Actions:

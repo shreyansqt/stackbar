@@ -10,14 +10,20 @@ struct Service: Identifiable, Codable, Equatable {
     /// child process. A service with two commands (e.g. a transpile watcher +
     /// a docker compose up) starts/stops them together.
     var commands: [String]
+    /// Optional shell commands run on stop, in order, AFTER the start processes
+    /// are SIGTERM'd — e.g. `docker compose down` to tear down containers that a
+    /// `docker compose up` start command left running. Empty = SIGTERM only.
+    var stopCommands: [String]
     /// TCP port to probe for "is it actually up". nil = process-alive only.
     var port: Int?
 
-    init(id: UUID = UUID(), name: String, directory: String, commands: [String], port: Int? = nil) {
+    init(id: UUID = UUID(), name: String, directory: String, commands: [String],
+         stopCommands: [String] = [], port: Int? = nil) {
         self.id = id
         self.name = name
         self.directory = directory
         self.commands = commands
+        self.stopCommands = stopCommands
         self.port = port
     }
 
@@ -30,7 +36,7 @@ struct Service: Identifiable, Codable, Equatable {
 
     // Backward/forward compatible coding: accept either `commands: [...]`
     // (new) or `command: "..."` (old single-command configs).
-    enum CodingKeys: String, CodingKey { case id, name, directory, commands, command, port }
+    enum CodingKeys: String, CodingKey { case id, name, directory, commands, command, stopCommands, port }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -38,6 +44,7 @@ struct Service: Identifiable, Codable, Equatable {
         name = try c.decode(String.self, forKey: .name)
         directory = try c.decode(String.self, forKey: .directory)
         port = try c.decodeIfPresent(Int.self, forKey: .port)
+        stopCommands = try c.decodeIfPresent([String].self, forKey: .stopCommands) ?? []
         if let cmds = try c.decodeIfPresent([String].self, forKey: .commands) {
             commands = cmds
         } else if let single = try c.decodeIfPresent(String.self, forKey: .command) {
@@ -53,6 +60,7 @@ struct Service: Identifiable, Codable, Equatable {
         try c.encode(name, forKey: .name)
         try c.encode(directory, forKey: .directory)
         try c.encode(commands, forKey: .commands)
+        if !stopCommands.isEmpty { try c.encode(stopCommands, forKey: .stopCommands) }
         try c.encodeIfPresent(port, forKey: .port)
     }
 }
@@ -65,13 +73,15 @@ enum ServiceStatus: Equatable {
     case starting
     /// Process alive and (if a port is configured) port is open.
     case running
+    /// Running the service's stop commands (e.g. docker compose down).
+    case stopping
     /// Process exited non-zero while we expected it up.
     case crashed(code: Int32)
 
     var dotColor: StatusColor {
         switch self {
         case .idle: return .gray
-        case .starting: return .yellow
+        case .starting, .stopping: return .yellow
         case .running: return .green
         case .crashed: return .red
         }
@@ -83,6 +93,7 @@ enum ServiceStatus: Equatable {
         case .idle: return "idle"
         case .starting: return "starting"
         case .running: return "running"
+        case .stopping: return "stopping"
         case .crashed(let code): return "crashed(\(code))"
         }
     }

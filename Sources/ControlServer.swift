@@ -135,7 +135,9 @@ final class ControlServer {
             return .json(["error": "name, directory, and command(s) required"], status: 400)
         }
         let port = body["port"] as? Int
-        let service = Service(name: name, directory: directory, commands: commands, port: port)
+        let stopCommands = (body["stopCommands"] as? [String]) ?? []
+        let service = Service(name: name, directory: directory, commands: commands,
+                              stopCommands: stopCommands, port: port)
         manager.addService(service)
         return .json(["ok": true, "id": service.id.uuidString])
     }
@@ -149,6 +151,7 @@ final class ControlServer {
             name: body["name"] as? String ?? old.name,
             directory: body["directory"] as? String ?? old.directory,
             commands: extractCommands(body) ?? old.commands,
+            stopCommands: (body["stopCommands"] as? [String]) ?? old.stopCommands,
             port: body.keys.contains("port") ? (body["port"] as? Int) : old.port
         )
         manager.updateService(updated)

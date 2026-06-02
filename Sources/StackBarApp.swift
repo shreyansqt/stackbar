@@ -33,7 +33,7 @@ extension ServiceStatus {
     var menuBarSymbol: String {
         switch self {
         case .idle: return "circle.dashed"
-        case .starting: return "circle.dotted"
+        case .starting, .stopping: return "circle.dotted"
         case .running: return "checkmark.circle.fill"
         case .crashed: return "exclamationmark.triangle.fill"
         }

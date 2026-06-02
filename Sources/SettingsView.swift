@@ -70,6 +70,24 @@ struct SettingsView: View {
                 .buttonStyle(.borderless)
             }
 
+            Section("Stop commands (optional)") {
+                ForEach(draft.stopCommands.indices, id: \.self) { i in
+                    HStack {
+                        TextField("Stop command", text: $draft.stopCommands[i],
+                                  prompt: Text("e.g. docker compose down"))
+                            .font(.system(.body, design: .monospaced))
+                        Button { draft.stopCommands.remove(at: i) } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                Button { draft.stopCommands.append("") } label: {
+                    Label("Add stop command", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+            }
+
             TextField("Port (optional)", text: $draft.portText,
                       prompt: Text("e.g. 3000"))
 
@@ -97,16 +115,16 @@ struct SettingsView: View {
 
     private func save() {
         let port = Int(draft.portText.trimmingCharacters(in: .whitespaces))
-        let commands = draft.commands
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+        let trim = { (xs: [String]) in xs.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+        let commands = trim(draft.commands)
+        let stopCommands = trim(draft.stopCommands)
         if let id = selection {
             manager.updateService(Service(id: id, name: draft.name,
                                           directory: draft.directory,
-                                          commands: commands, port: port))
+                                          commands: commands, stopCommands: stopCommands, port: port))
         } else {
             let service = Service(name: draft.name, directory: draft.directory,
-                                  commands: commands, port: port)
+                                  commands: commands, stopCommands: stopCommands, port: port)
             manager.addService(service)
             selection = service.id
         }
@@ -135,6 +153,7 @@ private struct Draft {
     var name = ""
     var directory = ""
     var commands: [String] = [""]
+    var stopCommands: [String] = []
     var portText = ""
 
     init() {}
@@ -143,6 +162,7 @@ private struct Draft {
         name = service.name
         directory = service.directory
         commands = service.commands.isEmpty ? [""] : service.commands
+        stopCommands = service.stopCommands
         portText = service.port.map(String.init) ?? ""
     }
 

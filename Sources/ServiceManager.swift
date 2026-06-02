@@ -33,7 +33,7 @@ final class ServiceManager: ObservableObject {
         if statuses.contains(where: { if case .crashed = $0 { return true } else { return false } }) {
             return .crashed(code: 1)
         }
-        if statuses.contains(.starting) { return .starting }
+        if statuses.contains(.starting) || statuses.contains(.stopping) { return .starting }
         if statuses.contains(.running) { return .running }
         return .idle
     }
@@ -93,6 +93,7 @@ final class ServiceManager: ObservableObject {
                 "name": r.config.name,
                 "directory": r.config.directory,
                 "commands": r.config.commands,
+                "stopCommands": r.config.stopCommands,
                 "command": r.config.displayCommand,
                 "port": r.config.port as Any,
                 "status": r.status.label,
