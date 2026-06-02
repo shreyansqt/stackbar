@@ -24,12 +24,66 @@ final class ServiceManager: ObservableObject {
         self.configURL = support.appendingPathComponent("services.json")
 
         load()
+        // Reclaim any processes a previous StackBar instance left orphaned (they
+        // reparent to launchd, so a fresh instance can't reach them via process
+        // groups). Without this they accumulate across relaunches/crashes.
+        cleanupOrphansFromPreviousRun()
         startHealthTimer()
 
         // Local HTTP control channel for the CLI / MCP.
         let server = ControlServer(manager: self)
         self.controlServer = server
         server.start()
+    }
+
+    /// Kill leftover processes from a previous StackBar run. Two passes:
+    ///  1. By env marker: any process whose environment carries STACKBAR_MANAGED
+    ///     (covers port-less services like watchers, and detached subtrees).
+    ///  2. By port: anything LISTENING on a configured service port (skips
+    ///     container runtimes — see RunningService.killProcessOnPort).
+    private func cleanupOrphansFromPreviousRun() {
+        let ports = runners.compactMap(\.config.port)
+        // Run off the main thread — process scanning forks `ps`, which must never
+        // block app launch.
+        DispatchQueue.global(qos: .utility).async {
+            var killed = 0
+
+            // Pass 1 — env marker. Narrow to likely dev processes first (pgrep by
+            // command), then check only those few for the STACKBAR_MANAGED env var.
+            // (macOS `ps` only exposes env when queried per-pid.)
+            let candidates = Self.shellLines("/usr/bin/pgrep",
+                ["-f", "pnpm|wrangler|workerd|webpack|vite|yarn|node|esbuild"])
+                .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+            for pid in candidates {
+                let env = Self.shellLines("/bin/ps", ["-Eww", "-o", "command=", "-p", String(pid)]).joined()
+                if env.contains("STACKBAR_MANAGED=") {
+                    kill(pid, SIGTERM)
+                    killed += 1
+                }
+            }
+            if killed > 0 {
+                Log.info("startup cleanup: signaled \(killed) leftover STACKBAR_MANAGED process(es)")
+            }
+
+            // Pass 2 — by port, for each configured service that declares one.
+            for port in ports {
+                RunningService.killProcessOnPort(port)
+            }
+        }
+    }
+
+    /// Run a command and return its stdout lines (small helper for process scans).
+    nonisolated private static func shellLines(_ path: String, _ args: [String]) -> [String] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = args
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        guard (try? p.run()) != nil else { return [] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(data: data, encoding: .utf8)?.split(whereSeparator: \.isNewline).map(String.init) ?? []
     }
 
     // MARK: - Aggregate status for the menu bar glyph

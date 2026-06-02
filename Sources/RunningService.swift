@@ -137,6 +137,9 @@ final class RunningService: ObservableObject, Identifiable {
         var env = ProcessInfo.processInfo.environment
         env["FORCE_COLOR"] = "1"      // node ecosystem (vite, webpack, etc.)
         env["CLICOLOR_FORCE"] = "1"   // BSD/CLI tools
+        // Tag the whole subtree so a future launch can sweep orphans this instance
+        // leaves behind (e.g. wrangler/pnpm children that reparent to launchd).
+        env["STACKBAR_MANAGED"] = config.id.uuidString
         proc.environment = env
 
         let pipe = Pipe()
@@ -217,7 +220,7 @@ final class RunningService: ObservableObject, Identifiable {
 
     /// Kill whatever is listening on `port` (SIGTERM), EXCEPT container-runtime
     /// processes. Catches detached dev-server workers that re-parented away from us.
-    static func killProcessOnPort(_ port: Int?) {
+    nonisolated static func killProcessOnPort(_ port: Int?) {
         guard let port else { return }
         let lsof = Process()
         lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
@@ -241,7 +244,7 @@ final class RunningService: ObservableObject, Identifiable {
     }
 
     /// Best-effort process command name for a pid (via `ps -o comm=`).
-    private static func processName(pid: Int32) -> String {
+    nonisolated private static func processName(pid: Int32) -> String {
         let ps = Process()
         ps.executableURL = URL(fileURLWithPath: "/bin/ps")
         ps.arguments = ["-o", "comm=", "-p", String(pid)]
