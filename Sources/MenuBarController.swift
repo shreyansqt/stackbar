@@ -68,12 +68,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        addItem(to: menu, title: "Start All", action: #selector(startAll), key: "")
-        addItem(to: menu, title: "Stop All", action: #selector(stopAll), key: "")
+        addItem(to: menu, title: "Start All", action: #selector(startAll), key: "", symbol: "play.fill")
+        addItem(to: menu, title: "Stop All", action: #selector(stopAll), key: "", symbol: "stop.fill")
         menu.addItem(.separator())
-        // No ⌘, here: that shortcut makes macOS decorate the item with a gear.
-        addItem(to: menu, title: "Edit Services…", action: #selector(openSettings), key: "")
-        addItem(to: menu, title: "Quit StackBar", action: #selector(quit), key: "q")
+        addItem(to: menu, title: "Edit Services…", action: #selector(openSettings), key: "", symbol: "gearshape")
+        addItem(to: menu, title: "Quit StackBar", action: #selector(quit), key: "q", symbol: "power")
     }
 
     // MARK: - Per-service item + submenu
@@ -161,9 +160,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return image
     }
 
-    private func addItem(to menu: NSMenu, title: String, action: Selector, key: String) {
+    private func addItem(to menu: NSMenu, title: String, action: Selector, key: String, symbol: String? = nil) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
+        if let symbol {
+            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+            image?.isTemplate = true   // adopt the menu's label color
+            item.image = image
+        }
         menu.addItem(item)
     }
 
