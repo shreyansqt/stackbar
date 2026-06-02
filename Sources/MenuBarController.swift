@@ -33,66 +33,107 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 DispatchQueue.main.async { self?.updateIcon() }
             }
             .store(in: &cancellables)
+
+        // Redraw the glyph when the system switches light/dark so it stays
+        // legible (white on dark bar, black on light bar).
+        DistributedNotificationCenter.default.addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async { self?.updateIcon() }
+        }
     }
 
     // MARK: - Status bar icon
+    //
+    // Status is conveyed by the glyph itself (all template images, so macOS colors
+    // them correctly for any menu bar — no fragile colored-dot compositing):
+    //   idle       → dim stack glyph
+    //   allRunning → solid stack glyph
+    //   booting    → rotating spinner (animated by a timer)
+    //   crashed    → exclamation triangle
+
+    private var spinnerTimer: Timer?
+    private var spinnerAngle: CGFloat = 0
 
     private func updateIcon() {
         guard let button = statusItem.button else { return }
-        // Resolve the glyph color against the status button's effective appearance
-        // (which reflects the menu bar — white on a dark bar, black on a light one),
-        // NOT the app's appearance. Non-template, so the colored badge survives.
-        let glyphColor = button.effectiveAppearance.resolveLabelColor()
-        button.image = makeStatusImage(badge: manager.badgeStatus, glyphColor: glyphColor)
-        button.image?.isTemplate = false
+        let state = manager.iconState
+
+        // Start/stop the spinner animation as we enter/leave the booting state.
+        if state == .booting {
+            startSpinner()
+            return   // the spinner timer drives the image
+        }
+        stopSpinner()
+
+        let image: NSImage?
+        switch state {
+        case .crashed:
+            image = symbol("exclamationmark.triangle.fill")
+        case .allRunning:
+            image = symbol("square.stack.3d.up.fill")
+        case .idle:
+            image = symbol("square.stack.3d.up.fill", alpha: 0.4)
+        case .booting:
+            image = nil // handled above
+        }
+        image?.isTemplate = true
+        button.image = image
+        button.imagePosition = .imageOnly
     }
 
-    /// Draw the base glyph plus a colored status badge in the top-right corner.
-    private func makeStatusImage(badge: ServiceManager.BadgeStatus, glyphColor: NSColor) -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        let glyph = NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: "StackBar")?
-            .withSymbolConfiguration(config)
+    /// A template SF Symbol at the menu bar size, optionally drawn at reduced alpha
+    /// (still a template, so macOS tints it to the bar color and our alpha dims it).
+    private func symbol(_ name: String, alpha: CGFloat = 1) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: "StackBar")?
+            .withSymbolConfiguration(config) else { return nil }
+        guard alpha < 1 else { return base }
 
-        let image = NSImage(size: size)
+        let image = NSImage(size: base.size)
         image.lockFocus()
-        let ctx = NSGraphicsContext.current?.cgContext
-
-        // Glyph, tinted to match the menu bar (white on dark, black on light).
-        if let glyph {
-            let gSize = glyph.size
-            let rect = NSRect(x: (size.width - gSize.width) / 2,
-                              y: (size.height - gSize.height) / 2,
-                              width: gSize.width, height: gSize.height)
-            glyph.draw(in: rect)
-            glyphColor.set()
-            rect.fill(using: .sourceAtop)   // tint the just-drawn template glyph
-        }
-
-        // Badge dot, top-right, with a small cleared ring so it reads against the glyph.
-        if let color = badgeColor(badge) {
-            let d: CGFloat = 7
-            let dotRect = NSRect(x: size.width - d, y: size.height - d, width: d, height: d)
-            if let ctx {
-                ctx.setBlendMode(.clear)
-                ctx.fillEllipse(in: dotRect.insetBy(dx: -1.3, dy: -1.3))
-                ctx.setBlendMode(.normal)
-            }
-            color.set()
-            NSBezierPath(ovalIn: dotRect).fill()
-        }
-
+        base.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: alpha)
         image.unlockFocus()
+        image.isTemplate = true
         return image
     }
 
-    private func badgeColor(_ badge: ServiceManager.BadgeStatus) -> NSColor? {
-        switch badge {
-        case .allRunning: return .systemGreen
-        case .someDown: return .systemOrange
-        case .allDown: return .systemRed
-        case .idle: return .systemGray
+    // MARK: Spinner
+
+    private func startSpinner() {
+        guard spinnerTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tickSpinner() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        spinnerTimer = timer
+        tickSpinner()
+    }
+
+    private func stopSpinner() {
+        spinnerTimer?.invalidate()
+        spinnerTimer = nil
+        spinnerAngle = 0
+    }
+
+    private func tickSpinner() {
+        guard let button = statusItem.button else { return }
+        spinnerAngle -= .pi / 6   // 30° per tick, clockwise
+        guard let base = symbol("arrow.triangle.2.circlepath") else { return }
+
+        let size = base.size
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let ctx = NSGraphicsContext.current
+        ctx?.cgContext.translateBy(x: size.width / 2, y: size.height / 2)
+        ctx?.cgContext.rotate(by: spinnerAngle)
+        base.draw(at: NSPoint(x: -size.width / 2, y: -size.height / 2),
+                  from: .zero, operation: .sourceOver, fraction: 1)
+        image.unlockFocus()
+        image.isTemplate = true
+        button.image = image
+        button.imagePosition = .imageOnly
     }
 
     // MARK: - NSMenuDelegate (build fresh each time it opens)
@@ -255,12 +296,3 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func quit() { NSApp.terminate(nil) }
 }
 
-private extension NSAppearance {
-    /// Resolve labelColor (and thus light/dark) against THIS appearance — used to
-    /// match the glyph to the menu bar rather than the app's own appearance.
-    func resolveLabelColor() -> NSColor {
-        var color = NSColor.labelColor
-        performAsCurrentDrawingAppearance { color = NSColor.labelColor.usingColorSpace(.sRGB) ?? .labelColor }
-        return color
-    }
-}

@@ -4,11 +4,17 @@ import Combine
 /// Owns the configured services, their runtime objects, persistence, and the health timer.
 @MainActor
 final class ServiceManager: ObservableObject {
-    @Published private(set) var runners: [RunningService] = []
+    @Published private(set) var runners: [RunningService] = [] {
+        didSet { observeRunners() }
+    }
 
     private var healthTimer: Timer?
     private let configURL: URL
     private var controlServer: ControlServer?
+    /// Subscriptions forwarding each runner's status changes up to us, so the menu
+    /// bar (which observes the manager) refreshes when a service's status changes —
+    /// not only when the runners array itself changes.
+    private var runnerObservations: [AnyCancellable] = []
 
     init() {
         let support = FileManager.default
@@ -38,24 +44,27 @@ final class ServiceManager: ObservableObject {
         return .idle
     }
 
-    /// Badge shown on the menu bar glyph.
-    enum BadgeStatus {
-        case allRunning   // green  — every service is up
-        case someDown     // orange — at least one up, at least one not
-        case allDown      // red    — none up and at least one crashed
-        case idle         // gray   — nothing running, nothing crashed
+    /// Overall state that drives which menu bar glyph is shown.
+    /// Precedence: crashed > booting > allRunning > idle.
+    enum IconState {
+        case idle         // nothing running — dim glyph
+        case booting      // something starting/stopping — animated spinner
+        case allRunning   // everything up — solid glyph
+        case crashed      // something errored — exclamation triangle
     }
 
-    var badgeStatus: BadgeStatus {
-        guard !runners.isEmpty else { return .idle }
-        let total = runners.count
-        let running = runners.filter { if case .running = $0.status { return true } else { return false } }.count
-        let crashed = runners.filter { if case .crashed = $0.status { return true } else { return false } }.count
-
-        if running == total { return .allRunning }
-        if running > 0 { return .someDown }
-        // none running:
-        if crashed > 0 { return .allDown }
+    var iconState: IconState {
+        let statuses = runners.map(\.status)
+        if statuses.contains(where: { if case .crashed = $0 { return true } else { return false } }) {
+            return .crashed
+        }
+        if statuses.contains(.starting) || statuses.contains(.stopping) {
+            return .booting
+        }
+        let running = statuses.filter { if case .running = $0 { return true } else { return false } }.count
+        if !runners.isEmpty && running == runners.count {
+            return .allRunning
+        }
         return .idle
     }
 
@@ -83,6 +92,16 @@ final class ServiceManager: ObservableObject {
         try? FileManager.default.removeItem(at: LogStore.logFile(for: id))
         try? FileManager.default.removeItem(at: LogStore.metaFile(for: id))
         persist()
+    }
+
+    /// Forward each runner's change notifications to the manager so observers
+    /// (the menu bar controller) update on per-service status changes too.
+    private func observeRunners() {
+        runnerObservations = runners.map { runner in
+            runner.objectWillChange.sink { [weak self] in
+                self?.objectWillChange.send()
+            }
+        }
     }
 
     // MARK: - Lookup & per-id actions (used by the control server)
