@@ -70,50 +70,36 @@ server.tool(
     })
 );
 
-// ---- CRUD ----
+// ---- Workspaces & discovery ----
+// Services aren't added here — they come from .stackbar.json files in the user's
+// workspace folders. These tools manage workspaces and re-scan.
 
 server.tool(
-  "add_service",
-  "Add a new service to StackBar. The directory must be an absolute path. Pass one or more commands; each runs via zsh in that directory as its own child process, all started/stopped together (e.g. a transpile watcher + a docker compose up).",
-  {
-    name: z.string(),
-    directory: z.string().describe("Absolute path the commands run in"),
-    commands: z.array(z.string()).min(1).describe("Shell commands, e.g. ['yarn transpile-watch', 'yarn up']"),
-    stopCommands: z.array(z.string()).optional()
-      .describe("Optional commands run on stop, after the start processes are SIGTERM'd, e.g. ['docker compose down']"),
-    port: z.number().int().positive().optional().describe("TCP port to probe for health"),
-  },
-  (args) => withApp(async () => {
-    const r = await api.add(args);
-    return text(`Added "${args.name}" (id ${r.id}) with ${args.commands.length} command(s).`);
+  "rescan_services",
+  "Re-scan the configured workspace folders for .stackbar.json files and reconcile the service list. Use after adding/editing a .stackbar.json.",
+  {},
+  () => withApp(async () => {
+    await api.rescan();
+    const services = await api.list();
+    return text(`Rescanned — ${services.length} service(s) discovered.`);
   })
 );
 
 server.tool(
-  "edit_service",
-  "Edit an existing service. Only the fields you pass are changed. Passing `commands` replaces the full command list.",
-  {
-    service: z.string().describe("Service name/id to edit"),
-    name: z.string().optional(),
-    directory: z.string().optional(),
-    commands: z.array(z.string()).min(1).optional().describe("Replacement command list"),
-    stopCommands: z.array(z.string()).optional().describe("Replacement stop-command list (e.g. ['docker compose down'])"),
-    port: z.number().int().positive().nullable().optional().describe("New port, or null to clear"),
-  },
-  ({ service, ...patch }) => withApp(async () => {
-    const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
-    await api.edit(service, clean);
-    return text(`Updated "${service}".`);
-  })
+  "list_workspaces",
+  "List the workspace folders StackBar scans for .stackbar.json service files.",
+  {},
+  () => withApp(async () => text(JSON.stringify(await api.workspaces(), null, 2)))
 );
 
 server.tool(
-  "remove_service",
-  "Remove a service from StackBar (stops it first and deletes its logs).",
-  { service: z.string().describe("Service name/id to remove") },
-  ({ service }) => withApp(async () => {
-    await api.remove(service);
-    return text(`Removed "${service}".`);
+  "add_workspace",
+  "Track a folder as a workspace; StackBar recursively scans it for .stackbar.json files and lists those services.",
+  { path: z.string().describe("Absolute path to a folder to scan") },
+  ({ path }) => withApp(async () => {
+    await api.addWorkspace(path);
+    const services = await api.list();
+    return text(`Added workspace ${path}. ${services.length} service(s) now discovered.`);
   })
 );
 

@@ -30,13 +30,13 @@ async function main() {
     case "list":
     case "ls":
       return cmdList();
-    case "add":
-      return cmdAdd();
-    case "edit":
-      return cmdEdit();
-    case "remove":
-    case "rm":
-      return cmdRemove();
+    case "rescan":
+    case "refresh":
+      return cmdRescan();
+    case "workspaces":
+      return cmdWorkspaces();
+    case "add-workspace":
+      return cmdAddWorkspace();
     case "start":
       return cmdAction("start");
     case "stop":
@@ -85,59 +85,30 @@ async function cmdList() {
   }
 }
 
-async function cmdAdd() {
-  const name = args[1];
-  const dir = flag("dir", "d");
-  const commands = flagAll("cmd", "c");
-  const stopCommands = flagAll("stop-cmd");
-  const portStr = flag("port", "p");
-  if (!name || !dir || commands.length === 0) {
-    console.error("usage: stackbar add <name> --dir <path> --cmd <command> [--cmd <c2> ...] [--stop-cmd <c> ...] [--port N]");
-    process.exit(1);
-  }
-  const r = await api.add({
-    name,
-    directory: dir,
-    commands,
-    stopCommands: stopCommands.length ? stopCommands : undefined,
-    port: portStr ? parseInt(portStr, 10) : undefined,
-  });
-  console.log(`Added "${name}" (${r.id})`);
+async function cmdRescan() {
+  await api.rescan();
+  const services = await api.list();
+  console.log(`Rescanned — ${services.length} service(s) discovered.`);
 }
 
-async function cmdEdit() {
-  const target = args[1];
-  if (!target) {
-    console.error("usage: stackbar edit <service> [--name N] [--dir P] [--cmd C] [--port N]");
-    process.exit(1);
+async function cmdWorkspaces() {
+  const ws = await api.workspaces();
+  if (ws.length === 0) {
+    console.log("No workspaces. Add one: stackbar add-workspace <folder>");
+    return;
   }
-  const patch: Record<string, unknown> = {};
-  const name = flag("name");
-  const dir = flag("dir", "d");
-  const commands = flagAll("cmd", "c");
-  const stopCommands = flagAll("stop-cmd");
-  const portStr = flag("port", "p");
-  if (name !== undefined) patch.name = name;
-  if (dir !== undefined) patch.directory = dir;
-  if (commands.length > 0) patch.commands = commands;
-  if (stopCommands.length > 0) patch.stopCommands = stopCommands;
-  if (portStr !== undefined) patch.port = portStr === "" ? null : parseInt(portStr, 10);
-  if (Object.keys(patch).length === 0) {
-    console.error("nothing to change; pass --name/--dir/--cmd/--port");
-    process.exit(1);
-  }
-  await api.edit(target, patch);
-  console.log(`Updated "${target}"`);
+  for (const w of ws) console.log(w);
 }
 
-async function cmdRemove() {
-  const target = args[1];
-  if (!target) {
-    console.error("usage: stackbar remove <service>");
+async function cmdAddWorkspace() {
+  const path = args[1];
+  if (!path) {
+    console.error("usage: stackbar add-workspace <folder>");
     process.exit(1);
   }
-  await api.remove(target);
-  console.log(`Removed "${target}"`);
+  await api.addWorkspace(path);
+  const services = await api.list();
+  console.log(`Added workspace. ${services.length} service(s) now discovered.`);
 }
 
 async function cmdAction(action: "start" | "stop" | "restart") {
@@ -219,12 +190,13 @@ async function cmdSearch() {
 function usage() {
   console.log(`stackbar — control and inspect StackBar services
 
+Services come from .stackbar.json files in your workspace folders.
+
 Services:
   stackbar list                                    List services + live status
-  stackbar add <name> --dir P --cmd C [--cmd C2 ...] [--stop-cmd S ...] [--port N]
-  stackbar edit <service> [--name|--dir|--cmd|--stop-cmd|--port ...]   Edit a service
-                                                   (repeat --cmd / --stop-cmd for multiple)
-  stackbar remove <service>                        Remove a service
+  stackbar rescan                                  Re-scan workspaces for .stackbar.json
+  stackbar workspaces                              List workspace folders
+  stackbar add-workspace <folder>                  Track a folder (scanned for services)
 
 Actions:
   stackbar start   <service|all>                   Start

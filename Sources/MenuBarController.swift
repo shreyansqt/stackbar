@@ -190,10 +190,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         if manager.runners.isEmpty {
-            let empty = NSMenuItem(title: "No services yet", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(
+                title: manager.workspaces.isEmpty
+                    ? "No workspace yet — add a folder to scan"
+                    : "No .stackbar.json files found in your workspace",
+                action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
-            addItem(to: menu, title: "Add a service…", action: #selector(openSettings), key: "")
+            addItem(to: menu, title: "Manage Workspaces…", action: #selector(openSettings), key: "")
         } else {
             for runner in manager.runners {
                 menu.addItem(serviceItem(for: runner))
@@ -204,10 +208,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         addItem(to: menu, title: "Start All", action: #selector(startAll), key: "", symbol: "play.fill")
         addItem(to: menu, title: "Stop All", action: #selector(stopAll), key: "", symbol: "stop.fill")
+        addItem(to: menu, title: "Refresh Services", action: #selector(refresh), key: "", symbol: "arrow.clockwise")
         menu.addItem(.separator())
-        addItem(to: menu, title: "Edit Services…", action: #selector(openSettings), key: "", symbol: "gearshape")
+        addItem(to: menu, title: "Workspaces…", action: #selector(openSettings), key: "", symbol: "folder")
         addItem(to: menu, title: "Quit StackBar", action: #selector(quit), key: "q", symbol: "power")
     }
+
+    @objc private func refresh() { manager.rescan() }
 
     // MARK: - Per-service item + submenu
 

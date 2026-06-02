@@ -82,82 +82,40 @@ final class ControlServer {
         let parts = req.path.split(separator: "/").map { String($0).removingPercentEncoding ?? String($0) }
         let m = req.method
 
-        // Collection routes.
-        if parts == ["services"] {
-            if m == "GET" { return .json(["services": manager.statusSnapshot()]) }
-            if m == "POST" { return addService(req) }
+        // Services are read-only here now (config lives in .stackbar.json files).
+        if parts == ["services"], m == "GET" {
+            return .json(["services": manager.statusSnapshot()])
         }
         if m == "POST" && parts == ["start-all"] { manager.startAll(); return .json(["ok": true]) }
         if m == "POST" && parts == ["stop-all"] { manager.stopAll(); return .json(["ok": true]) }
+        if m == "POST" && parts == ["rescan"] { manager.rescan(); return .json(["ok": true, "services": manager.statusSnapshot()]) }
 
-        // Item routes: /services/<idOrName>[/action]
-        if parts.count >= 2, parts[0] == "services" {
+        // Workspace management.
+        if parts == ["workspaces"] {
+            if m == "GET" { return .json(["workspaces": manager.workspaces.map(\.path)]) }
+            if m == "POST" {
+                guard let body = req.jsonBody, let path = body["path"] as? String else {
+                    return .json(["error": "path required"], status: 400)
+                }
+                manager.addWorkspace(URL(fileURLWithPath: path))
+                return .json(["ok": true, "services": manager.statusSnapshot()])
+            }
+        }
+
+        // Service actions: /services/<idOrName>/<action>
+        if parts.count >= 3, parts[0] == "services" {
             let idOrName = parts[1]
-            let action = parts.count >= 3 ? parts[2] : nil
-
+            let action = parts[2]
+            guard let r = manager.resolve(idOrName) else { return notFound(idOrName) }
             switch (m, action) {
-            case ("PATCH", nil):
-                return editService(idOrName, req)
-            case ("DELETE", nil):
-                guard let r = manager.resolve(idOrName) else { return notFound(idOrName) }
-                manager.deleteService(id: r.id)
-                return .json(["ok": true])
-            case ("POST", "start"):
-                guard let r = manager.resolve(idOrName) else { return notFound(idOrName) }
-                r.start()
-                return .json(["ok": true, "status": r.status.label])
-            case ("POST", "stop"):
-                guard let r = manager.resolve(idOrName) else { return notFound(idOrName) }
-                r.stop()
-                return .json(["ok": true, "status": r.status.label])
-            case ("POST", "restart"):
-                guard let r = manager.resolve(idOrName) else { return notFound(idOrName) }
-                r.restart()
-                return .json(["ok": true])
-            default:
-                break
+            case ("POST", "start"): r.start(); return .json(["ok": true, "status": r.status.label])
+            case ("POST", "stop"): r.stop(); return .json(["ok": true, "status": r.status.label])
+            case ("POST", "restart"): r.restart(); return .json(["ok": true])
+            default: break
             }
         }
 
         return .json(["error": "not found", "path": req.path], status: 404)
-    }
-
-    /// Accept either `commands: [String]` or a single `command: String`.
-    private func extractCommands(_ body: [String: Any]) -> [String]? {
-        if let cmds = body["commands"] as? [String], !cmds.isEmpty { return cmds }
-        if let single = body["command"] as? String { return [single] }
-        return nil
-    }
-
-    private func addService(_ req: HTTPRequest) -> HTTPResponse {
-        guard let body = req.jsonBody,
-              let name = body["name"] as? String,
-              let directory = body["directory"] as? String,
-              let commands = extractCommands(body) else {
-            return .json(["error": "name, directory, and command(s) required"], status: 400)
-        }
-        let port = body["port"] as? Int
-        let stopCommands = (body["stopCommands"] as? [String]) ?? []
-        let service = Service(name: name, directory: directory, commands: commands,
-                              stopCommands: stopCommands, port: port)
-        manager.addService(service)
-        return .json(["ok": true, "id": service.id.uuidString])
-    }
-
-    private func editService(_ idOrName: String, _ req: HTTPRequest) -> HTTPResponse {
-        guard let r = manager.resolve(idOrName) else { return notFound(idOrName) }
-        guard let body = req.jsonBody else { return .json(["error": "invalid body"], status: 400) }
-        let old = r.config
-        let updated = Service(
-            id: old.id,
-            name: body["name"] as? String ?? old.name,
-            directory: body["directory"] as? String ?? old.directory,
-            commands: extractCommands(body) ?? old.commands,
-            stopCommands: (body["stopCommands"] as? [String]) ?? old.stopCommands,
-            port: body.keys.contains("port") ? (body["port"] as? Int) : old.port
-        )
-        manager.updateService(updated)
-        return .json(["ok": true, "id": updated.id.uuidString])
     }
 
     private func notFound(_ idOrName: String) -> HTTPResponse {

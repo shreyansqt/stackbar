@@ -77,17 +77,6 @@ export interface ServiceStatus {
 export const api = {
   list: (): Promise<ServiceStatus[]> =>
     call("GET", "/services").then((r) => r.services as ServiceStatus[]),
-  add: (s: {
-    name: string;
-    directory: string;
-    commands: string[];
-    stopCommands?: string[];
-    port?: number;
-  }) => call("POST", "/services", s),
-  edit: (idOrName: string, patch: Record<string, unknown>) =>
-    call("PATCH", `/services/${encodeURIComponent(idOrName)}`, patch),
-  remove: (idOrName: string) =>
-    call("DELETE", `/services/${encodeURIComponent(idOrName)}`),
   start: (idOrName: string) =>
     call("POST", `/services/${encodeURIComponent(idOrName)}/start`),
   stop: (idOrName: string) =>
@@ -96,4 +85,8 @@ export const api = {
     call("POST", `/services/${encodeURIComponent(idOrName)}/restart`),
   startAll: () => call("POST", "/start-all"),
   stopAll: () => call("POST", "/stop-all"),
+  rescan: () => call("POST", "/rescan"),
+  workspaces: (): Promise<string[]> =>
+    call("GET", "/workspaces").then((r) => r.workspaces as string[]),
+  addWorkspace: (path: string) => call("POST", "/workspaces", { path }),
 };

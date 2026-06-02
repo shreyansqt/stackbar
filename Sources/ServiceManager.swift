@@ -8,8 +8,12 @@ final class ServiceManager: ObservableObject {
         didSet { observeRunners() }
     }
 
+    /// Workspace folders the user tracks. Services are discovered by scanning these
+    /// for `.stackbar.json` files — the repos own their config, not the app.
+    @Published private(set) var workspaces: [URL] = []
+
     private var healthTimer: Timer?
-    private let configURL: URL
+    private let workspacesURL: URL
     private var controlServer: ControlServer?
     /// Subscriptions forwarding each runner's status changes up to us, so the menu
     /// bar (which observes the manager) refreshes when a service's status changes —
@@ -21,9 +25,10 @@ final class ServiceManager: ObservableObject {
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("StackBar", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        self.configURL = support.appendingPathComponent("services.json")
+        self.workspacesURL = support.appendingPathComponent("workspaces.json")
 
-        load()
+        loadWorkspaces()
+        rescan()
         // Reclaim any processes a previous StackBar instance left orphaned (they
         // reparent to launchd, so a fresh instance can't reach them via process
         // groups). Without this they accumulate across relaunches/crashes.
@@ -130,30 +135,50 @@ final class ServiceManager: ObservableObject {
         return .idle
     }
 
-    // MARK: - CRUD
+    // MARK: - Workspaces & discovery
 
-    func addService(_ service: Service) {
-        runners.append(RunningService(config: service))
-        persist()
+    func addWorkspace(_ url: URL) {
+        let std = url.standardizedFileURL
+        guard !workspaces.contains(std) else { return }
+        workspaces.append(std)
+        saveWorkspaces()
+        rescan()
     }
 
-    func updateService(_ service: Service) {
-        guard let idx = runners.firstIndex(where: { $0.id == service.id }) else { return }
-        let wasLive = runners[idx].isLive
-        if wasLive { runners[idx].stop() }
-        runners[idx] = RunningService(config: service)
-        persist()
-        if wasLive { runners[idx].start() }
+    func removeWorkspace(_ url: URL) {
+        workspaces.removeAll { $0 == url.standardizedFileURL }
+        saveWorkspaces()
+        rescan()
     }
 
-    func deleteService(id: UUID) {
-        guard let idx = runners.firstIndex(where: { $0.id == id }) else { return }
-        runners[idx].stop()
-        runners.remove(at: idx)
-        // Clean up the service's log + meta files.
-        try? FileManager.default.removeItem(at: LogStore.logFile(for: id))
-        try? FileManager.default.removeItem(at: LogStore.metaFile(for: id))
-        persist()
+    /// Re-discover services from all workspaces and reconcile with current runners,
+    /// preserving the live state of services that are still present (matched by id).
+    func rescan() {
+        let discovered = WorkspaceScanner.scan(workspaces: workspaces)
+        let existing = Dictionary(uniqueKeysWithValues: runners.map { ($0.id, $0) })
+
+        var next: [RunningService] = []
+        var keptIDs = Set<UUID>()
+        for service in discovered {
+            keptIDs.insert(service.id)
+            if let current = existing[service.id] {
+                // Same service (same folder). If its config changed while idle, swap
+                // in a fresh runner; if it's live, keep the running one as-is.
+                if current.config == service || current.isLive {
+                    next.append(current)
+                } else {
+                    next.append(RunningService(config: service))
+                }
+            } else {
+                next.append(RunningService(config: service))
+            }
+        }
+        // Stop + drop services that disappeared from the workspaces.
+        for runner in runners where !keptIDs.contains(runner.id) {
+            runner.stop()
+        }
+        runners = next.sorted { $0.config.name.localizedCompare($1.config.name) == .orderedAscending }
+        Log.info("rescan: \(workspaces.count) workspace(s) → \(runners.count) service(s)")
     }
 
     /// Forward each runner's change notifications to the manager so observers
@@ -218,19 +243,19 @@ final class ServiceManager: ObservableObject {
         }
     }
 
-    // MARK: - Persistence
+    // MARK: - Workspace persistence
 
-    private func load() {
-        guard let data = try? Data(contentsOf: configURL),
-              let services = try? JSONDecoder().decode([Service].self, from: data) else {
+    private func loadWorkspaces() {
+        guard let data = try? Data(contentsOf: workspacesURL),
+              let paths = try? JSONDecoder().decode([String].self, from: data) else {
             return
         }
-        runners = services.map { RunningService(config: $0) }
+        workspaces = paths.map { URL(fileURLWithPath: $0).standardizedFileURL }
     }
 
-    private func persist() {
-        let services = runners.map(\.config)
-        guard let data = try? JSONEncoder().encode(services) else { return }
-        try? data.write(to: configURL)
+    private func saveWorkspaces() {
+        let paths = workspaces.map(\.path)
+        guard let data = try? JSONEncoder().encode(paths) else { return }
+        try? data.write(to: workspacesURL)
     }
 }

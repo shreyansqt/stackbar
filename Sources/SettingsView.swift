@@ -1,215 +1,116 @@
 import SwiftUI
 import AppKit
 
-/// Add/edit/delete services. Master list on the left, editor on the right.
+/// Manage workspace folders. StackBar discovers services by scanning these for
+/// `.stackbar.json` files — config lives in the repos, not in the app.
 struct SettingsView: View {
     @EnvironmentObject var manager: ServiceManager
-    @State private var selection: UUID?
-    @State private var draft = Draft()
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
-        } detail: {
-            editor
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if manager.workspaces.isEmpty {
+                emptyState
+            } else {
+                content
+            }
+            Divider()
+            footer
         }
-        .frame(minWidth: 640, minHeight: 440)
-        .onChange(of: selection) { _, newValue in loadDraft(for: newValue) }
+        .frame(width: 560, height: 460)
     }
 
-    // MARK: - Sidebar
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Workspaces").font(.headline)
+                Text("Folders StackBar scans for .stackbar.json files")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button { manager.rescan() } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+        }
+        .padding(16)
+    }
 
-    private var sidebar: some View {
-        List(selection: $selection) {
-            Section("Services") {
-                ForEach(manager.runners) { runner in
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "folder.badge.plus")
+                .font(.system(size: 36)).foregroundStyle(.secondary)
+            Text("No workspaces yet").font(.title3)
+            Text("Add a folder (e.g. your projects directory). StackBar finds every\n.stackbar.json under it and lists those services.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Add Workspace…") { chooseWorkspace() }
+                .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+
+    private var content: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(manager.workspaces, id: \.self) { ws in
+                    workspaceSection(ws)
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private func workspaceSection(_ ws: URL) -> some View {
+        let services = manager.runners.filter { $0.config.directory.hasPrefix(ws.path) }
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "folder.fill").foregroundStyle(.secondary)
+                Text(ws.path).font(.system(.body, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Button(role: .destructive) { manager.removeWorkspace(ws) } label: {
+                    Image(systemName: "minus.circle")
+                }.buttonStyle(.borderless)
+            }
+            if services.isEmpty {
+                Text("No .stackbar.json files found here.")
+                    .font(.caption).foregroundStyle(.secondary).padding(.leading, 22)
+            } else {
+                ForEach(services) { runner in
                     HStack(spacing: 8) {
                         StatusDot(status: runner.status)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(runner.config.name)
-                                .lineLimit(1)
-                            if let port = runner.config.port {
-                                Text("localhost:\(port)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                        Text(runner.config.name)
+                        if let port = runner.config.port {
+                            Text("localhost:\(port)").font(.caption).foregroundStyle(.secondary)
                         }
+                        Spacer()
                     }
-                    .padding(.vertical, 2)
-                    .tag(runner.id)
+                    .padding(.leading, 22)
                 }
             }
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 2) {
-                Button { newService() } label: { Image(systemName: "plus") }
-                    .help("Add service")
-                Button { deleteSelected() } label: { Image(systemName: "minus") }
-                    .help("Remove service")
-                    .disabled(selection == nil)
-                Spacer()
-            }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.bar)
+            Divider()
         }
     }
 
-    // MARK: - Editor
-
-    private var editor: some View {
-        Form {
-            Section {
-                TextField("Name", text: $draft.name, prompt: Text("e.g. smarta-banking"))
-                LabeledContent("Directory") {
-                    HStack {
-                        Text(draft.directory.isEmpty ? "No folder chosen" : draft.directory)
-                            .foregroundStyle(draft.directory.isEmpty ? .secondary : .primary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("Choose…") { chooseDirectory() }
-                    }
-                }
-                TextField("Port", text: $draft.portText, prompt: Text("optional, e.g. 3000"))
-            }
-
-            Section("Start commands") {
-                ForEach(draft.commands.indices, id: \.self) { i in
-                    commandRow(text: $draft.commands[i],
-                               placeholder: "e.g. yarn dev",
-                               canRemove: draft.commands.count > 1) {
-                        draft.commands.remove(at: i)
-                    }
-                }
-                addButton("Add command") { draft.commands.append("") }
-            }
-
-            Section {
-                ForEach(draft.stopCommands.indices, id: \.self) { i in
-                    commandRow(text: $draft.stopCommands[i],
-                               placeholder: "e.g. docker compose down",
-                               canRemove: true) {
-                        draft.stopCommands.remove(at: i)
-                    }
-                }
-                addButton("Add stop command") { draft.stopCommands.append("") }
-            } header: {
-                Text("Stop commands")
-            } footer: {
-                Text("Run on stop, after the start processes are terminated. Optional.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    private var footer: some View {
+        HStack {
+            Button { chooseWorkspace() } label: { Label("Add Workspace…", systemImage: "plus") }
+            Spacer()
+            Text("\(manager.runners.count) service\(manager.runners.count == 1 ? "" : "s") discovered")
+                .font(.caption).foregroundStyle(.secondary)
         }
-        .formStyle(.grouped)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button(selection == nil ? "Add" : "Save") { save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!draft.isValid)
-            }
-        }
+        .padding(12)
     }
 
-    private func commandRow(text: Binding<String>, placeholder: String,
-                            canRemove: Bool, remove: @escaping () -> Void) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "terminal")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-            TextField("", text: text, prompt: Text(placeholder))
-                .font(.system(.body, design: .monospaced))
-                .textFieldStyle(.plain)
-            if canRemove {
-                Button(role: .destructive) { remove() } label: {
-                    Image(systemName: "minus.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-            }
-        }
-    }
-
-    private func addButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: "plus.circle")
-        }
-        .buttonStyle(.borderless)
-        .controlSize(.small)
-    }
-
-    // MARK: - Actions
-
-    private func newService() {
-        selection = nil
-        draft = Draft()
-    }
-
-    private func loadDraft(for id: UUID?) {
-        guard let id, let runner = manager.runners.first(where: { $0.id == id }) else { return }
-        draft = Draft(from: runner.config)
-    }
-
-    private func save() {
-        let port = Int(draft.portText.trimmingCharacters(in: .whitespaces))
-        let trim = { (xs: [String]) in xs.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
-        let commands = trim(draft.commands)
-        let stopCommands = trim(draft.stopCommands)
-        if let id = selection {
-            manager.updateService(Service(id: id, name: draft.name,
-                                          directory: draft.directory,
-                                          commands: commands, stopCommands: stopCommands, port: port))
-        } else {
-            let service = Service(name: draft.name, directory: draft.directory,
-                                  commands: commands, stopCommands: stopCommands, port: port)
-            manager.addService(service)
-            selection = service.id
-        }
-    }
-
-    private func deleteSelected() {
-        guard let id = selection else { return }
-        manager.deleteService(id: id)
-        selection = nil
-        draft = Draft()
-    }
-
-    private func chooseDirectory() {
+    private func chooseWorkspace() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.prompt = "Add Workspace"
         if panel.runModal() == .OK, let url = panel.url {
-            draft.directory = url.path
+            manager.addWorkspace(url)
         }
-    }
-}
-
-/// Mutable editor state, decoupled from the immutable Service model.
-private struct Draft {
-    var name = ""
-    var directory = ""
-    var commands: [String] = [""]
-    var stopCommands: [String] = []
-    var portText = ""
-
-    init() {}
-
-    init(from service: Service) {
-        name = service.name
-        directory = service.directory
-        commands = service.commands.isEmpty ? [""] : service.commands
-        stopCommands = service.stopCommands
-        portText = service.port.map(String.init) ?? ""
-    }
-
-    var isValid: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !directory.trimmingCharacters(in: .whitespaces).isEmpty &&
-        commands.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 }
