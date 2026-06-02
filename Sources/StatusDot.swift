@@ -8,7 +8,7 @@ struct StatusDot: View {
         Circle()
             .fill(color)
             .frame(width: 9, height: 9)
-            .overlay(Circle().stroke(.black.opacity(0.1), lineWidth: 0.5))
+            .overlay(Circle().stroke(.primary.opacity(0.12), lineWidth: 0.5))
     }
 
     private var color: Color {

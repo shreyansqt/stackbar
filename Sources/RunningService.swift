@@ -67,6 +67,13 @@ final class RunningService: ObservableObject, Identifiable {
         proc.arguments = ["-lc", command]
         proc.currentDirectoryURL = URL(fileURLWithPath: config.directory)
 
+        // Ask CLIs to emit ANSI color even though stdout is a pipe, not a TTY —
+        // so the captured logs carry the same colors they'd show in a terminal.
+        var env = ProcessInfo.processInfo.environment
+        env["FORCE_COLOR"] = "1"      // node ecosystem (vite, webpack, etc.)
+        env["CLICOLOR_FORCE"] = "1"   // BSD/CLI tools
+        proc.environment = env
+
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe

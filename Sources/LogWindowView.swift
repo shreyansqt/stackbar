@@ -106,10 +106,13 @@ private struct LogContent: View {
     }
 }
 
-/// One console line: a dim gutter line-number + the monospaced text.
+/// One console line: a dim gutter line-number + the monospaced text. If the line
+/// carries ANSI color codes (most dev servers), render those; otherwise fall back
+/// to a keyword heuristic so plain output still gets sensible tinting.
 private struct LogLine: View {
     let number: Int
     let text: String
+    private let font = Font.system(size: 11.5, design: .monospaced)
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -118,9 +121,8 @@ private struct LogLine: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 40, alignment: .trailing)
                 .textSelection(.disabled)
-            Text(text.isEmpty ? " " : text)
-                .font(.system(size: 11.5, design: .monospaced))
-                .foregroundStyle(lineColor)
+            content
+                .font(font)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -128,14 +130,39 @@ private struct LogLine: View {
         .padding(.vertical, 0.5)
     }
 
-    /// Tint obvious error/warn lines so they stand out in the console.
-    private var lineColor: Color {
+    @ViewBuilder
+    private var content: some View {
+        if text.contains("\u{1B}[") {
+            ansiText
+        } else {
+            Text(text.isEmpty ? " " : text)
+                .foregroundStyle(heuristicColor)
+        }
+    }
+
+    /// Concatenate the parsed ANSI runs into one colored Text.
+    private var ansiText: Text {
+        ANSI.parse(text).reduce(Text("")) { acc, run in
+            var t = Text(run.text)
+            if let color = run.color { t = t.foregroundColor(color) }
+            if run.bold { t = t.bold() }
+            return acc + t
+        }
+    }
+
+    /// Tint for non-ANSI lines: errors/warns + our own [stackbar] markers.
+    private var heuristicColor: Color {
         let lower = text.lowercased()
-        if lower.contains("error") || lower.contains("✘") || lower.contains("fatal") {
+        if lower.contains("error") || lower.contains("✘") || lower.contains("fatal")
+            || lower.contains("eaddrinuse") || lower.contains("exception") {
             return .red
         }
-        if lower.contains("warn") {
+        if lower.contains("warn") || lower.contains("deprecat") {
             return .orange
+        }
+        if lower.contains("ready") || lower.contains("compiled successfully")
+            || lower.contains("found 0 errors") || lower.contains("listening") {
+            return .green
         }
         if text.hasPrefix("[stackbar]") || text.hasPrefix("[stop]") {
             return .secondary
