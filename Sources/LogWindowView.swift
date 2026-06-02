@@ -25,12 +25,6 @@ private struct LogContent: View {
     @State private var autoScroll = true
     @State private var filter = ""
 
-    private var lines: [(offset: Int, line: String)] {
-        let all = Array(runner.logLines.enumerated()).map { (offset: $0.offset, line: $0.element) }
-        guard !filter.isEmpty else { return all }
-        return all.filter { $0.line.localizedCaseInsensitiveContains(filter) }
-    }
-
     var body: some View {
         NavigationStack {
             console
@@ -76,97 +70,21 @@ private struct LogContent: View {
     // MARK: - Console
 
     private var console: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(lines, id: \.offset) { item in
-                        LogLine(number: item.offset + 1, text: item.line)
-                            .id(item.offset)
-                    }
-                }
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        LogTextView(lines: visibleLines, autoScroll: autoScroll)
             .background(Color(nsColor: .textBackgroundColor))
             .overlay(alignment: .center) {
-                if lines.isEmpty {
+                if visibleLines.isEmpty {
                     Text(filter.isEmpty ? "No output yet" : "No lines match “\(filter)”")
                         .foregroundStyle(.secondary)
                         .font(.callout)
                 }
             }
-            .onChange(of: runner.logLines.count) { _, count in
-                guard autoScroll, count > 0 else { return }
-                withAnimation(.linear(duration: 0.1)) {
-                    proxy.scrollTo(count - 1, anchor: .bottom)
-                }
-            }
-        }
-        .searchable(text: $filter, placement: .toolbar, prompt: "Filter log")
-    }
-}
-
-/// One console line: a dim gutter line-number + the monospaced text. If the line
-/// carries ANSI color codes (most dev servers), render those; otherwise fall back
-/// to a keyword heuristic so plain output still gets sensible tinting.
-private struct LogLine: View {
-    let number: Int
-    let text: String
-    private let font = Font.system(size: 11.5, design: .monospaced)
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text("\(number)")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.tertiary)
-                .frame(width: 40, alignment: .trailing)
-                .textSelection(.disabled)
-            content
-                .font(font)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 0.5)
+            .searchable(text: $filter, placement: .toolbar, prompt: "Filter log")
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if text.contains("\u{1B}[") {
-            ansiText
-        } else {
-            Text(text.isEmpty ? " " : text)
-                .foregroundStyle(heuristicColor)
-        }
-    }
-
-    /// Concatenate the parsed ANSI runs into one colored Text.
-    private var ansiText: Text {
-        ANSI.parse(text).reduce(Text("")) { acc, run in
-            var t = Text(run.text)
-            if let color = run.color { t = t.foregroundColor(color) }
-            if run.bold { t = t.bold() }
-            return acc + t
-        }
-    }
-
-    /// Tint for non-ANSI lines: errors/warns + our own [stackbar] markers.
-    private var heuristicColor: Color {
-        let lower = text.lowercased()
-        if lower.contains("error") || lower.contains("✘") || lower.contains("fatal")
-            || lower.contains("eaddrinuse") || lower.contains("exception") {
-            return .red
-        }
-        if lower.contains("warn") || lower.contains("deprecat") {
-            return .orange
-        }
-        if lower.contains("ready") || lower.contains("compiled successfully")
-            || lower.contains("found 0 errors") || lower.contains("listening") {
-            return .green
-        }
-        if text.hasPrefix("[stackbar]") || text.hasPrefix("[stop]") {
-            return .secondary
-        }
-        return .primary
+    /// Lines after applying the toolbar filter.
+    private var visibleLines: [String] {
+        guard !filter.isEmpty else { return runner.logLines }
+        return runner.logLines.filter { $0.localizedCaseInsensitiveContains(filter) }
     }
 }

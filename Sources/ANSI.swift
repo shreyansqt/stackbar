@@ -1,28 +1,33 @@
 import SwiftUI
+import AppKit
 
 /// Minimal ANSI SGR (Select Graphic Rendition) parser. Dev servers like wrangler,
 /// vite and webpack emit color via `ESC[ ... m` sequences; this turns a raw line
 /// into styled runs so we can render the same colors they'd show in a terminal.
 ///
-/// ANSI colors map to *semantic* SwiftUI colors (.red, .green, …) rather than
+/// ANSI colors map to *semantic* colors (systemRed, systemGreen, …) rather than
 /// fixed RGB, so they stay legible in both light and dark mode.
 enum ANSI {
+    /// A run of text carrying a resolved color index (nil = default text color).
     struct Run: Identifiable {
         let id = UUID()
         var text: String
-        var color: Color?
+        var colorIndex: Int?   // 0..7 ANSI color, or nil for default
         var bold: Bool
+
+        var color: Color? { ANSI.swiftUIColor(colorIndex) }
+        var nsColor: NSColor? { ANSI.nsColor(colorIndex) }
     }
 
     /// Active SGR state while scanning a line.
     private struct Style {
-        var color: Color?
+        var colorIndex: Int?
         var bold = false
     }
 
     static func parse(_ line: String) -> [Run] {
         guard line.contains("\u{1B}[") else {
-            return [Run(text: line, color: nil, bold: false)]
+            return [Run(text: line, colorIndex: nil, bold: false)]
         }
 
         var runs: [Run] = []
@@ -33,7 +38,7 @@ enum ANSI {
 
         func flush() {
             guard !current.isEmpty else { return }
-            runs.append(Run(text: current, color: style.color, bold: style.bold))
+            runs.append(Run(text: current, colorIndex: style.colorIndex, bold: style.bold))
             current = ""
         }
 
@@ -57,7 +62,7 @@ enum ANSI {
             i += 1
         }
         flush()
-        return runs.isEmpty ? [Run(text: "", color: nil, bold: false)] : runs
+        return runs.isEmpty ? [Run(text: "", colorIndex: nil, bold: false)] : runs
     }
 
     private static func isParamScalar(_ s: Unicode.Scalar) -> Bool {
@@ -73,25 +78,38 @@ enum ANSI {
             case 0: style = Style()                    // reset
             case 1: style.bold = true
             case 22: style.bold = false
-            case 39: style.color = nil                 // default fg
-            case 30...37: style.color = standardColor(code - 30)
-            case 90...97: style.color = standardColor(code - 90) // bright → same semantic
+            case 39: style.colorIndex = nil            // default fg
+            case 30...37: style.colorIndex = code - 30
+            case 90...97: style.colorIndex = code - 90 // bright → same semantic
             default: break                             // ignore bg, underline, 256/truecolor for now
             }
         }
     }
 
-    /// Map the 8 ANSI colors to semantic SwiftUI colors (adapt to light/dark).
-    private static func standardColor(_ n: Int) -> Color? {
+    /// Map the 8 ANSI color indices to semantic SwiftUI colors (adapt to light/dark).
+    static func swiftUIColor(_ n: Int?) -> Color? {
         switch n {
-        case 0: return .secondary   // "black" — use secondary so it's visible on dark too
+        case 0: return .secondary   // "black" → secondary so it's visible on dark too
         case 1: return .red
         case 2: return .green
         case 3: return .yellow
         case 4: return .blue
         case 5: return .purple
         case 6: return .teal
-        case 7: return nil          // "white" — default label color
+        default: return nil         // "white"/7 and nil → default label color
+        }
+    }
+
+    /// Same mapping as NSColor, for NSAttributedString rendering.
+    static func nsColor(_ n: Int?) -> NSColor? {
+        switch n {
+        case 0: return .secondaryLabelColor
+        case 1: return .systemRed
+        case 2: return .systemGreen
+        case 3: return .systemYellow
+        case 4: return .systemBlue
+        case 5: return .systemPurple
+        case 6: return .systemTeal
         default: return nil
         }
     }
