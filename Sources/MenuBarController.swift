@@ -199,15 +199,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(empty)
             addItem(to: menu, title: "Manage Workspaces…", action: #selector(openSettings), key: "")
         } else {
-            for runner in manager.runners {
-                menu.addItem(serviceItem(for: runner))
+            // One section per workspace: a header row (whose submenu carries that
+            // workspace's Start All / Stop All), then its services.
+            let groups = manager.runnersByWorkspace
+            for (index, group) in groups.enumerated() {
+                if index > 0 { menu.addItem(.separator()) }
+                menu.addItem(workspaceHeader(for: group.workspace))
+                for runner in group.runners {
+                    menu.addItem(serviceItem(for: runner))
+                }
             }
         }
 
         menu.addItem(.separator())
 
-        addItem(to: menu, title: "Start All", action: #selector(startAll), key: "", symbol: "play.fill")
-        addItem(to: menu, title: "Stop All", action: #selector(stopAll), key: "", symbol: "stop.fill")
         addItem(to: menu, title: "Refresh Services", action: #selector(refresh), key: "", symbol: "arrow.clockwise")
         menu.addItem(.separator())
         addItem(to: menu, title: "Workspaces…", action: #selector(openSettings), key: "", symbol: "folder")
@@ -259,7 +264,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         submenu.addItem(sectionHeader("Start commands"))
         for idx in runner.config.commands.indices {
             let hasLogs = runner.startCommandsRan.contains(idx) && !runner.logLinesByCommand[safe: idx, default: []].isEmpty
-            let entry = commandItem(title: runner.config.commands[idx], hasLogs: hasLogs,
+            let entry = commandItem(title: runner.config.commandStrings[idx], hasLogs: hasLogs,
                                     target: LogTarget(id: runner.id, kind: .start, commandIndex: idx))
             entry.image = statusImage(for: runner.commandStates[safe: idx, default: .idle])
             submenu.addItem(entry)
@@ -271,7 +276,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             submenu.addItem(sectionHeader("Stop commands"))
             for idx in runner.config.stopCommands.indices {
                 let hasLogs = runner.stopCommandsRan.contains(idx) && !runner.stopLogLinesByCommand[safe: idx, default: []].isEmpty
-                let entry = commandItem(title: runner.config.stopCommands[idx], hasLogs: hasLogs,
+                let entry = commandItem(title: runner.config.stopCommandStrings[idx], hasLogs: hasLogs,
                                         target: LogTarget(id: runner.id, kind: .stop, commandIndex: idx))
                 submenu.addItem(entry)
             }
@@ -279,6 +284,37 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         item.submenu = submenu
         return item
+    }
+
+    /// A workspace section header. The row is styled like `sectionHeader`, and its
+    /// submenu carries Start All / Stop All scoped to that workspace. A nil
+    /// workspace is the catch-all "Other" group (no scoped bulk controls).
+    private func workspaceHeader(for workspace: URL?) -> NSMenuItem {
+        let name = workspace?.lastPathComponent ?? "Other"
+        let item = sectionHeader(name)
+
+        guard let workspace else { return item }   // "Other" has no scoped controls
+
+        item.isEnabled = true   // submenu parents must be enabled to open
+        let submenu = NSMenu()
+        let start = NSMenuItem(title: "Start All", action: #selector(startAllInWorkspace(_:)), keyEquivalent: "")
+        start.target = self
+        start.representedObject = workspace
+        start.image = templateSymbol("play.fill")
+        submenu.addItem(start)
+        let stop = NSMenuItem(title: "Stop All", action: #selector(stopAllInWorkspace(_:)), keyEquivalent: "")
+        stop.target = self
+        stop.representedObject = workspace
+        stop.image = templateSymbol("stop.fill")
+        submenu.addItem(stop)
+        item.submenu = submenu
+        return item
+    }
+
+    private func templateSymbol(_ name: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: name)
+        image?.isTemplate = true
+        return image
     }
 
     /// A section header drawn in a stronger color than NSMenu's faint default.
@@ -387,8 +423,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         NSWorkspace.shared.open(url)
     }
 
-    @objc private func startAll() { manager.startAll() }
-    @objc private func stopAll() { manager.stopAll() }
+    @objc private func startAllInWorkspace(_ sender: NSMenuItem) {
+        guard let ws = sender.representedObject as? URL else { return }
+        manager.startAll(in: ws)
+    }
+
+    @objc private func stopAllInWorkspace(_ sender: NSMenuItem) {
+        guard let ws = sender.representedObject as? URL else { return }
+        manager.stopAll(in: ws)
+    }
 
     @objc private func openSettings() {
         windows.openSettings()

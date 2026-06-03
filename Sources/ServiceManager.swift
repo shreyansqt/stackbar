@@ -216,6 +216,47 @@ final class ServiceManager: ObservableObject {
     func startAll() { runners.forEach { $0.start() } }
     func stopAll() { runners.forEach { $0.stop() } }
 
+    func startAll(in workspace: URL) { runners(in: workspace).forEach { $0.start() } }
+    func stopAll(in workspace: URL) { runners(in: workspace).forEach { $0.stop() } }
+
+    // MARK: - Workspace grouping
+
+    /// The runners grouped by the workspace they belong to, in workspace order,
+    /// with each group's runners kept in their existing (name-sorted) order. A
+    /// trailing `nil`-keyed group holds any runner under no tracked workspace.
+    var runnersByWorkspace: [(workspace: URL?, runners: [RunningService])] {
+        var groups: [(workspace: URL?, runners: [RunningService])] =
+            workspaces.map { (workspace: Optional($0), runners: []) }
+        var orphans: [RunningService] = []
+        var indexByWorkspace = Dictionary(
+            uniqueKeysWithValues: workspaces.enumerated().map { ($0.element, $0.offset) })
+
+        for runner in runners {
+            if let ws = workspace(for: runner), let i = indexByWorkspace[ws] {
+                groups[i].runners.append(runner)
+            } else {
+                orphans.append(runner)
+            }
+        }
+        if !orphans.isEmpty { groups.append((workspace: nil, runners: orphans)) }
+        return groups.filter { !$0.runners.isEmpty }
+    }
+
+    /// The tracked workspace a runner belongs to: the deepest (longest-path)
+    /// workspace folder that is an ancestor of the service's directory. nil if
+    /// none contains it.
+    private func workspace(for runner: RunningService) -> URL? {
+        let dir = URL(fileURLWithPath: runner.config.directory).standardizedFileURL.path
+        return workspaces
+            .filter { dir == $0.path || dir.hasPrefix($0.path + "/") }
+            .max { $0.path.count < $1.path.count }
+    }
+
+    private func runners(in workspace: URL) -> [RunningService] {
+        let std = workspace.standardizedFileURL
+        return runners.filter { self.workspace(for: $0) == std }
+    }
+
     // MARK: - Status snapshot (JSON-friendly)
 
     /// A serializable view of every service + live status, for the control API.
@@ -225,8 +266,8 @@ final class ServiceManager: ObservableObject {
                 "id": r.id.uuidString,
                 "name": r.config.name,
                 "directory": r.config.directory,
-                "commands": r.config.commands,
-                "stopCommands": r.config.stopCommands,
+                "commands": r.config.commandStrings,
+                "stopCommands": r.config.stopCommandStrings,
                 "command": r.config.displayCommand,
                 "port": r.config.port as Any,
                 "status": r.status.label,

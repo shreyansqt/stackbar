@@ -75,15 +75,15 @@ enum WorkspaceScanner {
         }
         let directory = fileURL.deletingLastPathComponent().path
         let name = (obj["name"] as? String) ?? fileURL.deletingLastPathComponent().lastPathComponent
-        let commands: [String]
-        if let cmds = obj["commands"] as? [String], !cmds.isEmpty {
+        let commands: [Command]
+        if let cmds = parseCommands(obj["commands"]), !cmds.isEmpty {
             commands = cmds
         } else if let single = obj["command"] as? String {
-            commands = [single]
+            commands = [Command(run: single)]
         } else {
             return nil   // a service must have at least one command
         }
-        let stopCommands = (obj["stopCommands"] as? [String]) ?? []
+        let stopCommands = parseCommands(obj["stopCommands"]) ?? []
         let port = obj["port"] as? Int
 
         // Stable id derived from the absolute directory path, so logs/state survive
@@ -91,6 +91,22 @@ enum WorkspaceScanner {
         let id = stableID(forPath: directory)
         return Service(id: id, name: name, directory: directory,
                        commands: commands, stopCommands: stopCommands, port: port)
+    }
+
+    /// Parse a JSON value into `Command`s, honoring both forms `Command` accepts:
+    /// a plain string `"yarn dev"` (background) or an object `{ "run": "...",
+    /// "background": false }`. Returns nil if the value isn't an array.
+    private static func parseCommands(_ value: Any?) -> [Command]? {
+        guard let array = value as? [Any] else { return nil }
+        return array.compactMap { element in
+            if let s = element as? String {
+                return Command(run: s)
+            }
+            if let obj = element as? [String: Any], let run = obj["run"] as? String {
+                return Command(run: run, background: obj["background"] as? Bool ?? true)
+            }
+            return nil
+        }
     }
 
     /// Deterministic UUID from a path: first 16 bytes of SHA-256("stackbar:" + path).

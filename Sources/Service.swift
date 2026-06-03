@@ -1,24 +1,64 @@
 import Foundation
 
+/// One shell command in a service's start or stop list. `background` controls
+/// whether the runner WAITS for it to exit before launching the next command:
+///   - background == true  → launch and immediately move on (long-lived: watchers,
+///     `docker compose up`, dev servers that never exit).
+///   - background == false → run to completion before the next command starts
+///     (short-lived prerequisites: `orb start`, a migration, `docker compose down`).
+///
+/// In JSON a command may be written two ways:
+///   - a plain string  "yarn dev"                            → background (don't wait)
+///   - an object       { "run": "...", "background": false } → wait for it
+struct Command: Codable, Equatable {
+    var run: String
+    var background: Bool
+
+    init(run: String, background: Bool = true) {
+        self.run = run
+        self.background = background
+    }
+
+    enum CodingKeys: String, CodingKey { case run, background }
+
+    init(from decoder: Decoder) throws {
+        // String shorthand → background command.
+        if let single = try? decoder.singleValueContainer().decode(String.self) {
+            run = single
+            background = true
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        run = try c.decode(String.self, forKey: .run)
+        background = try c.decodeIfPresent(Bool.self, forKey: .background) ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(run, forKey: .run)
+        try c.encode(background, forKey: .background)
+    }
+}
+
 /// A configured service the user wants to run locally.
 struct Service: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var name: String
     /// Working directory the commands run in. Absolute path.
     var directory: String
-    /// One or more shell commands, each run via `/bin/zsh -lc` as its own
-    /// child process. A service with two commands (e.g. a transpile watcher +
-    /// a docker compose up) starts/stops them together.
-    var commands: [String]
-    /// Optional shell commands run on stop, in order, AFTER the start processes
-    /// are SIGTERM'd — e.g. `docker compose down` to tear down containers that a
-    /// `docker compose up` start command left running. Empty = SIGTERM only.
-    var stopCommands: [String]
+    /// One or more shell commands run via `/bin/zsh -lc`, in order. The runner
+    /// waits for each non-background command to exit before starting the next;
+    /// background commands (watchers, docker up) are launched and left running.
+    var commands: [Command]
+    /// Shell commands run on stop, in order, AFTER the start processes are
+    /// SIGTERM'd — e.g. `docker compose down`. Same background semantics, though
+    /// stop steps are normally short-lived (background: false).
+    var stopCommands: [Command]
     /// TCP port to probe for "is it actually up". nil = process-alive only.
     var port: Int?
 
-    init(id: UUID = UUID(), name: String, directory: String, commands: [String],
-         stopCommands: [String] = [], port: Int? = nil) {
+    init(id: UUID = UUID(), name: String, directory: String, commands: [Command],
+         stopCommands: [Command] = [], port: Int? = nil) {
         self.id = id
         self.name = name
         self.directory = directory
@@ -27,16 +67,15 @@ struct Service: Identifiable, Codable, Equatable {
         self.port = port
     }
 
-    init(id: UUID = UUID(), name: String, directory: String, command: String, port: Int? = nil) {
-        self.init(id: id, name: name, directory: directory, commands: [command], port: port)
-    }
+    /// The shell text of each start command, for display/logging/menu titles.
+    var commandStrings: [String] { commands.map(\.run) }
+    /// The shell text of each stop command, for display/logging/menu titles.
+    var stopCommandStrings: [String] { stopCommands.map(\.run) }
 
     /// Display string joining all commands.
-    var displayCommand: String { commands.joined(separator: "  &&  ") }
+    var displayCommand: String { commandStrings.joined(separator: "  ·  ") }
 
-    // Backward/forward compatible coding: accept either `commands: [...]`
-    // (new) or `command: "..."` (old single-command configs).
-    enum CodingKeys: String, CodingKey { case id, name, directory, commands, command, stopCommands, port }
+    enum CodingKeys: String, CodingKey { case id, name, directory, commands, stopCommands, port }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -44,14 +83,8 @@ struct Service: Identifiable, Codable, Equatable {
         name = try c.decode(String.self, forKey: .name)
         directory = try c.decode(String.self, forKey: .directory)
         port = try c.decodeIfPresent(Int.self, forKey: .port)
-        stopCommands = try c.decodeIfPresent([String].self, forKey: .stopCommands) ?? []
-        if let cmds = try c.decodeIfPresent([String].self, forKey: .commands) {
-            commands = cmds
-        } else if let single = try c.decodeIfPresent(String.self, forKey: .command) {
-            commands = [single]
-        } else {
-            commands = []
-        }
+        commands = try c.decodeIfPresent([Command].self, forKey: .commands) ?? []
+        stopCommands = try c.decodeIfPresent([Command].self, forKey: .stopCommands) ?? []
     }
 
     func encode(to encoder: Encoder) throws {

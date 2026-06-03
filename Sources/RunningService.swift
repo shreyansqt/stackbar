@@ -112,16 +112,50 @@ final class RunningService: ObservableObject, Identifiable {
         launchedCount = 0
         terminatedCount = 0
 
-        let multi = config.commands.count > 1
-        for (idx, command) in config.commands.enumerated() {
-            let prefix = multi ? "[\(idx + 1)] " : ""
-            spawn(command, index: idx, prefix: prefix)
-        }
-        if processes.isEmpty {
-            status = .crashed(code: -1)
+        // Commands run IN ORDER. A background command is launched and we move on
+        // immediately (watchers, docker up); a non-background command must run to
+        // completion before the next one starts (e.g. `orb start` before docker).
+        // Because waiting blocks, the sequence is driven on a background queue and
+        // hops back to @MainActor for each state mutation.
+        let commands = config.commands
+        let multi = commands.count > 1
+        let name = config.name
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for (idx, command) in commands.enumerated() {
+                // Bail if the user stopped the service mid-sequence.
+                let keepGoing = DispatchQueue.main.sync { [weak self] () -> Bool in
+                    guard let self else { return false }
+                    return !self.stopping
+                }
+                if !keepGoing { return }
+
+                let prefix = multi ? "[\(idx + 1)] " : ""
+                if command.background {
+                    DispatchQueue.main.sync { self?.spawn(command.run, index: idx, prefix: prefix) }
+                } else {
+                    // Run to completion before continuing. A non-zero exit aborts
+                    // the rest of the sequence and crashes the service.
+                    let code = self?.runForeground(command.run, index: idx, prefix: prefix) ?? -1
+                    if code != 0 {
+                        Log.warn("[\(name)] start cmd[\(idx)] exited \(code); aborting start: \(command.run)")
+                        DispatchQueue.main.sync { self?.failStart(at: idx, code: code) }
+                        return
+                    }
+                }
+            }
+            DispatchQueue.main.sync { [weak self] in
+                guard let self else { return }
+                if self.processes.isEmpty && !self.stopping {
+                    // Every command was foreground and none is still running — nothing
+                    // to keep the service "up". Treat as idle rather than crashed.
+                    if case .starting = self.status { self.status = .idle }
+                }
+            }
         }
     }
 
+    /// Spawn a long-lived (background) command: kept in `processes` so stop() can
+    /// group-kill it. Must be called on the main actor.
     private func spawn(_ command: String, index: Int, prefix: String) {
         let proc = Process()
         // Run the command in its OWN process group/session so we can later kill the
@@ -131,16 +165,7 @@ final class RunningService: ObservableObject, Identifiable {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         proc.arguments = ["-e", "setpgrp; exec @ARGV", "/bin/zsh", "-lc", command]
         proc.currentDirectoryURL = URL(fileURLWithPath: config.directory)
-
-        // Ask CLIs to emit ANSI color even though stdout is a pipe, not a TTY —
-        // so the captured logs carry the same colors they'd show in a terminal.
-        var env = ProcessInfo.processInfo.environment
-        env["FORCE_COLOR"] = "1"      // node ecosystem (vite, webpack, etc.)
-        env["CLICOLOR_FORCE"] = "1"   // BSD/CLI tools
-        // Tag the whole subtree so a future launch can sweep orphans this instance
-        // leaves behind (e.g. wrangler/pnpm children that reparent to launchd).
-        env["STACKBAR_MANAGED"] = config.id.uuidString
-        proc.environment = env
+        proc.environment = childEnv
 
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -169,6 +194,68 @@ final class RunningService: ObservableObject, Identifiable {
             Log.error("[\(config.name)] cmd[\(index)] failed to launch: \(command) — \(error.localizedDescription)")
             append("[stackbar] failed to start: \(error.localizedDescription)\n", index: index, prefix: prefix)
         }
+    }
+
+    /// Run a non-background start command to completion, streaming its output into
+    /// the per-command log. Returns its exit code. Called OFF the main thread (it
+    /// blocks on `waitUntilExit`); state mutations hop back to @MainActor.
+    nonisolated private func runForeground(_ command: String, index: Int, prefix: String) -> Int32 {
+        let directory = DispatchQueue.main.sync { self.config.directory }
+        let env = DispatchQueue.main.sync { self.childEnv }
+        DispatchQueue.main.sync { self.append("[stackbar] running: \(command)\n", index: index, prefix: prefix) }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        proc.arguments = ["-e", "setpgrp; exec @ARGV", "/bin/zsh", "-lc", command]
+        proc.currentDirectoryURL = URL(fileURLWithPath: directory)
+        proc.environment = env
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            Task { @MainActor in self?.append(text, index: index, prefix: prefix) }
+        }
+        do {
+            try proc.run()
+        } catch {
+            DispatchQueue.main.sync {
+                self.append("[stackbar] failed to start: \(error.localizedDescription)\n", index: index, prefix: prefix)
+            }
+            pipe.fileHandleForReading.readabilityHandler = nil
+            return -1
+        }
+        proc.waitUntilExit()
+        pipe.fileHandleForReading.readabilityHandler = nil
+        let code = proc.terminationStatus
+        DispatchQueue.main.sync {
+            self.append("[stackbar] exited with code \(code)\n", index: index, prefix: prefix)
+            if index < self.commandStates.count {
+                self.commandStates[index] = code == 0 ? .idle : .crashed(code: code)
+            }
+        }
+        return code
+    }
+
+    /// A non-background start command failed: crash the service and bring any
+    /// already-running start processes down so state stays consistent.
+    private func failStart(at index: Int, code: Int32) {
+        if index < commandStates.count { commandStates[index] = .crashed(code: code) }
+        status = .crashed(code: code)
+        for proc in processes where proc.isRunning {
+            kill(-proc.processIdentifier, SIGTERM)
+        }
+    }
+
+    /// Environment for every spawned command: inherit the app's, force ANSI color,
+    /// and tag the subtree so orphan sweeps can find our descendants later.
+    private var childEnv: [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["FORCE_COLOR"] = "1"      // node ecosystem (vite, webpack, etc.)
+        env["CLICOLOR_FORCE"] = "1"   // BSD/CLI tools
+        env["STACKBAR_MANAGED"] = config.id.uuidString
+        return env
     }
 
     /// Synchronous force-kill of the whole process group — used on app quit so no
@@ -280,11 +367,12 @@ final class RunningService: ObservableObject, Identifiable {
             Log.info("[\(name)] start processes exited; running stop commands")
 
             for (i, command) in stopCommands.enumerated() {
-                Log.info("[\(name)] stop cmd start: \(command)")
+                let run = command.run
+                Log.info("[\(name)] stop cmd start: \(run)")
                 Task { @MainActor in self?.markStopCommandRan(i) }
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                proc.arguments = ["-lc", command]
+                proc.arguments = ["-lc", run]
                 proc.currentDirectoryURL = URL(fileURLWithPath: directory)
                 let pipe = Pipe()
                 proc.standardOutput = pipe
@@ -294,21 +382,27 @@ final class RunningService: ObservableObject, Identifiable {
                     guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
                     Task { @MainActor in self?.appendStop(text, index: i, prefix: "[stop] ") }
                 }
-                Task { @MainActor in self?.appendStop("[stackbar] stop: \(command)\n", index: i, prefix: "") }
+                Task { @MainActor in self?.appendStop("[stackbar] stop: \(run)\n", index: i, prefix: "") }
                 do {
                     try proc.run()
                 } catch {
-                    Log.error("[\(name)] stop cmd FAILED to launch: \(command) — \(error.localizedDescription)")
+                    Log.error("[\(name)] stop cmd FAILED to launch: \(run) — \(error.localizedDescription)")
                     pipe.fileHandleForReading.readabilityHandler = nil
+                    continue
+                }
+                // A background stop command is fire-and-forget: don't wait for it
+                // before moving to the next one. (Normal stop steps are foreground.)
+                if command.background {
+                    Log.info("[\(name)] stop cmd launched (background): \(run)")
                     continue
                 }
                 proc.waitUntilExit()
                 pipe.fileHandleForReading.readabilityHandler = nil
                 let code = proc.terminationStatus
                 if code == 0 {
-                    Log.info("[\(name)] stop cmd done (exit 0): \(command)")
+                    Log.info("[\(name)] stop cmd done (exit 0): \(run)")
                 } else {
-                    Log.warn("[\(name)] stop cmd exited \(code): \(command)")
+                    Log.warn("[\(name)] stop cmd exited \(code): \(run)")
                 }
             }
             Log.info("[\(name)] all stop commands finished")

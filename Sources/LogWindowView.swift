@@ -39,9 +39,9 @@ private struct LogContent: View {
     private var displayCommand: String {
         switch kind {
         case .start:
-            if let i = commandIndex, i < runner.config.commands.count { return runner.config.commands[i] }
+            if let i = commandIndex, i < runner.config.commands.count { return runner.config.commandStrings[i] }
         case .stop:
-            if let i = commandIndex, i < runner.config.stopCommands.count { return "stop: \(runner.config.stopCommands[i])" }
+            if let i = commandIndex, i < runner.config.stopCommands.count { return "stop: \(runner.config.stopCommandStrings[i])" }
         case .combined:
             break
         }
