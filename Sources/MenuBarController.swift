@@ -274,6 +274,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         ])
         statusItem.image = statusImage(for: runner.status)
         submenu.addItem(statusItem)
+        // Memory row — only meaningful while live. Container-backed services run in
+        // the runtime's VM, so their group RSS isn't representative; show a hint.
+        if runner.isLive {
+            let memText: String
+            if runner.isContainerBacked {
+                memText = "Memory: — (runs in container)"
+            } else if let mem = runner.memoryDescription {
+                memText = "Memory: \(mem)"
+            } else {
+                memText = "Memory: …"
+            }
+            submenu.addItem(detailRow(memText))
+        }
         if runner.config.port != nil {
             let open = NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser(_:)), keyEquivalent: "")
             open.target = self
@@ -320,6 +333,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         item.isEnabled = true   // submenu parents must be enabled to open
         let submenu = NSMenu()
+
+        // Total memory across this workspace's live services (omitted if none sampled).
+        if let total = manager.totalMemoryBytes(in: workspace) {
+            submenu.addItem(detailRow("Total memory: \(RunningService.formatBytes(total))"))
+            submenu.addItem(.separator())
+        }
+
         let start = NSMenuItem(title: "Start All", action: #selector(startAllInWorkspace(_:)), keyEquivalent: "")
         start.target = self
         start.representedObject = workspace
@@ -358,6 +378,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let image = NSImage(systemSymbolName: name, accessibilityDescription: name)
         image?.isTemplate = true
         return image
+    }
+
+    /// A disabled detail row in full label color (e.g. the memory readout),
+    /// matching the Status line's styling.
+    private func detailRow(_ text: String) -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: NSFont.menuFont(ofSize: 0),
+            .foregroundColor: NSColor.labelColor,
+        ])
+        item.isEnabled = false
+        return item
     }
 
     /// A section header drawn in a stronger color than NSMenu's faint default.

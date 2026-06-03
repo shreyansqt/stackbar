@@ -265,6 +265,13 @@ final class ServiceManager: ObservableObject {
         return runners.filter { self.workspace(for: $0) == std }
     }
 
+    /// Total sampled resident memory (bytes) across a workspace's live services.
+    /// nil when none have a sample yet (so the menu can omit the row).
+    func totalMemoryBytes(in workspace: URL) -> Int? {
+        let samples = runners(in: workspace).compactMap { $0.memoryBytes }
+        return samples.isEmpty ? nil : samples.reduce(0, +)
+    }
+
     // MARK: - Status snapshot (JSON-friendly)
 
     /// A serializable view of every service + live status, for the control API.
@@ -280,6 +287,7 @@ final class ServiceManager: ObservableObject {
                 "port": r.config.port as Any,
                 "status": r.status.label,
                 "live": r.isLive,
+                "memoryBytes": r.memoryBytes as Any,
             ]
         }
     }
@@ -288,7 +296,33 @@ final class ServiceManager: ObservableObject {
 
     private func startHealthTimer() {
         healthTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.runners.forEach { $0.refreshHealth() } }
+            Task { @MainActor in
+                guard let self else { return }
+                self.runners.forEach { $0.refreshHealth() }
+                self.sampleMemory()
+            }
+        }
+    }
+
+    /// Sample resident memory for every live service in a single `ps` over all of
+    /// their process groups, then distribute the per-group totals back. Runs off
+    /// the main actor so the `ps` call never blocks the UI.
+    private func sampleMemory() {
+        // (runner, its live group ids) — captured on the main actor before hopping off.
+        let work = runners.compactMap { r -> (RunningService, [Int32])? in
+            let pgids = r.liveProcessGroupIDs
+            return pgids.isEmpty ? nil : (r, pgids)
+        }
+        guard !work.isEmpty else { return }
+        let allPGIDs = work.flatMap { $0.1 }
+        Task.detached {
+            let totals = RunningService.groupRSS(pgids: allPGIDs)
+            await MainActor.run {
+                for (runner, pgids) in work {
+                    let bytes = pgids.reduce(0) { $0 + (totals[$1] ?? 0) }
+                    runner.setMemoryBytes(bytes > 0 ? bytes : nil)
+                }
+            }
         }
     }
 
