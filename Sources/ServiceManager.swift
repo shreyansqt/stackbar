@@ -155,6 +155,12 @@ final class ServiceManager: ObservableObject {
     /// preserving the live state of services that are still present (matched by id).
     func rescan() {
         let discovered = WorkspaceScanner.scan(workspaces: workspaces)
+        reconcile(with: discovered)
+    }
+
+    /// Reconcile freshly-discovered services with current runners, preserving the
+    /// live state of services still present (matched by id). Main-actor only.
+    private func reconcile(with discovered: [Service]) {
         let existing = Dictionary(uniqueKeysWithValues: runners.map { ($0.id, $0) })
 
         var next: [RunningService] = []
@@ -222,13 +228,15 @@ final class ServiceManager: ObservableObject {
     // MARK: - Workspace grouping
 
     /// The runners grouped by the workspace they belong to, in workspace order,
-    /// with each group's runners kept in their existing (name-sorted) order. A
-    /// trailing `nil`-keyed group holds any runner under no tracked workspace.
+    /// with each group's runners kept in their existing (name-sorted) order. Every
+    /// tracked workspace is included even with no services (so a freshly-added
+    /// folder shows an empty state rather than vanishing). A trailing `nil`-keyed
+    /// group holds any runner under no tracked workspace, and is omitted when empty.
     var runnersByWorkspace: [(workspace: URL?, runners: [RunningService])] {
         var groups: [(workspace: URL?, runners: [RunningService])] =
             workspaces.map { (workspace: Optional($0), runners: []) }
         var orphans: [RunningService] = []
-        var indexByWorkspace = Dictionary(
+        let indexByWorkspace = Dictionary(
             uniqueKeysWithValues: workspaces.enumerated().map { ($0.element, $0.offset) })
 
         for runner in runners {
@@ -239,7 +247,7 @@ final class ServiceManager: ObservableObject {
             }
         }
         if !orphans.isEmpty { groups.append((workspace: nil, runners: orphans)) }
-        return groups.filter { !$0.runners.isEmpty }
+        return groups
     }
 
     /// The tracked workspace a runner belongs to: the deepest (longest-path)

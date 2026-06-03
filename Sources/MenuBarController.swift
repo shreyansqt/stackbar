@@ -183,39 +183,44 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        // Header row (disabled, just a title).
+        // Header row (disabled, just a title) with the app's stack glyph.
         let header = NSMenuItem(title: "StackBar", action: nil, keyEquivalent: "")
         header.isEnabled = false
+        let headerIcon = NSImage(systemSymbolName: "rectangle.stack.fill", accessibilityDescription: "StackBar")
+        headerIcon?.isTemplate = true   // adopt the menu's label color
+        header.image = headerIcon
         menu.addItem(header)
         menu.addItem(.separator())
 
-        if manager.runners.isEmpty {
-            let empty = NSMenuItem(
-                title: manager.workspaces.isEmpty
-                    ? "No workspace yet — add a folder to scan"
-                    : "No .stackbar.json files found in your workspace",
-                action: nil, keyEquivalent: "")
+        if manager.workspaces.isEmpty {
+            let empty = NSMenuItem(title: "No workspace yet — add a folder to scan",
+                                   action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
-            addItem(to: menu, title: "Manage Workspaces…", action: #selector(openSettings), key: "")
+            addItem(to: menu, title: "Add Workspace…", action: #selector(addWorkspace), key: "")
         } else {
             // One section per workspace: a header row (whose submenu carries that
-            // workspace's Start All / Stop All), then its services.
+            // workspace's Start All / Stop All), then its services — or an empty
+            // hint if the workspace holds no .stackbar.json files yet.
             let groups = manager.runnersByWorkspace
             for (index, group) in groups.enumerated() {
                 if index > 0 { menu.addItem(.separator()) }
                 menu.addItem(workspaceHeader(for: group.workspace))
-                for runner in group.runners {
-                    menu.addItem(serviceItem(for: runner))
+                if group.runners.isEmpty {
+                    menu.addItem(emptyWorkspaceRow())
+                } else {
+                    for runner in group.runners {
+                        menu.addItem(serviceItem(for: runner))
+                    }
                 }
             }
         }
 
         menu.addItem(.separator())
 
+        addItem(to: menu, title: "Add Workspace…", action: #selector(addWorkspace), key: "", symbol: "folder.badge.plus")
         addItem(to: menu, title: "Refresh Services", action: #selector(refresh), key: "", symbol: "arrow.clockwise")
         menu.addItem(.separator())
-        addItem(to: menu, title: "Workspaces…", action: #selector(openSettings), key: "", symbol: "folder")
         addItem(to: menu, title: "Quit StackBar", action: #selector(quit), key: "q", symbol: "power")
     }
 
@@ -307,7 +312,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         stop.representedObject = workspace
         stop.image = templateSymbol("stop.fill")
         submenu.addItem(stop)
+
+        submenu.addItem(.separator())
+        let remove = NSMenuItem(title: "Remove Workspace", action: #selector(removeWorkspace(_:)), keyEquivalent: "")
+        remove.target = self
+        remove.representedObject = workspace
+        remove.image = templateSymbol("trash")
+        submenu.addItem(remove)
+
         item.submenu = submenu
+        return item
+    }
+
+    /// Placeholder row under a tracked workspace that has no discovered services,
+    /// drawn dim and indented like a disabled hint.
+    private func emptyWorkspaceRow() -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.attributedTitle = NSAttributedString(string: "No .stackbar.json files found here", attributes: [
+            .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+        ])
+        item.isEnabled = false
         return item
     }
 
@@ -433,8 +458,30 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         manager.stopAll(in: ws)
     }
 
-    @objc private func openSettings() {
-        windows.openSettings()
+    @objc private func addWorkspace() {
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add Workspace"
+        if panel.runModal() == .OK, let url = panel.url {
+            manager.addWorkspace(url)
+        }
+    }
+
+    @objc private func removeWorkspace(_ sender: NSMenuItem) {
+        guard let ws = sender.representedObject as? URL else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Remove this workspace?"
+        alert.informativeText = "\(ws.path)\n\nStackBar will stop its running services and drop them from the list. The folder and its files are not touched."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            manager.removeWorkspace(ws)
+        }
     }
 
     @objc private func quit() { NSApp.terminate(nil) }

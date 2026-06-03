@@ -1,33 +1,18 @@
 import AppKit
 import SwiftUI
 
-/// Hosts the app's SwiftUI views (settings, per-service logs) in plain NSWindows.
-/// A menu-bar-only app has no SwiftUI window scene that's reliably alive, so we
-/// open windows natively here. Reuses an existing window when reopened.
+/// Hosts the app's per-service log windows in plain NSWindows. A menu-bar-only
+/// app has no SwiftUI window scene that's reliably alive, so we open windows
+/// natively here. Reuses an existing window when reopened.
 @MainActor
 final class WindowManager {
     private let manager: ServiceManager
-    private var settingsWindow: NSWindow?
     /// One log window per service id.
     /// Keyed by "<id>" for a whole service, or "<id>.<cmdIndex>" for one command.
     private var logWindows: [String: NSWindow] = [:]
 
     init(manager: ServiceManager) {
         self.manager = manager
-    }
-
-    func openSettings() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let existing = settingsWindow {
-            existing.makeKeyAndOrderFront(nil)
-            return
-        }
-        let root = SettingsView().environmentObject(manager)
-        let window = makeWindow(title: "Services", content: root,
-                                size: NSSize(width: 660, height: 460))
-        window.delegate = closeObserver
-        settingsWindow = window
-        window.makeKeyAndOrderFront(nil)
     }
 
     func openLogs(for id: UUID, kind: LogTarget.Kind = .combined, commandIndex: Int? = nil) {
@@ -79,7 +64,6 @@ final class WindowManager {
     private lazy var closeObserver: WindowCloseObserver = {
         WindowCloseObserver { [weak self] window in
             guard let self else { return }
-            if window === self.settingsWindow { self.settingsWindow = nil }
             self.logWindows = self.logWindows.filter { $0.value !== window }
         }
     }()
