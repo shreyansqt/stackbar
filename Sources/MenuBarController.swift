@@ -221,10 +221,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         addItem(to: menu, title: "Add Workspace…", action: #selector(addWorkspace), key: "", symbol: "folder.badge.plus")
         addItem(to: menu, title: "Refresh Services", action: #selector(refresh), key: "", symbol: "arrow.clockwise")
         menu.addItem(.separator())
+        let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        login.target = self
+        login.state = LaunchAtLogin.isEnabled ? .on : .off
+        menu.addItem(login)
         addItem(to: menu, title: "Quit StackBar", action: #selector(quit), key: "q", symbol: "power")
     }
 
     @objc private func refresh() { manager.rescan() }
+
+    @objc private func toggleLaunchAtLogin() {
+        do {
+            try LaunchAtLogin.setEnabled(!LaunchAtLogin.isEnabled)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn’t change login item"
+            alert.informativeText = "\(error.localizedDescription)\n\nYou can manage StackBar under System Settings → General → Login Items."
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
+    }
 
     // MARK: - Per-service item + submenu
 
