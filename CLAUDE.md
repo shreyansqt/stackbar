@@ -70,6 +70,13 @@ CLI + MCP server. Read this before working in the repo.
   marker-based orphan cleanup pgreps candidates first, then checks each one's env.
 - **NSMenu is a snapshot per open** — it can't live-update while open (so e.g.
   uptime is as-of open time).
+- **Two service-data paths — keep them in sync.** `list_services` and all
+  start/stop/rescan tools go through the running app's HTTP control server
+  (`client.ts`). The log tools (`get_logs`/`search_logs`) resolve names *offline*
+  via `store.ts`, which reads the `logs/<id>.meta.json` files the app writes
+  per-service. There is **no** `services.json` registry — don't reintroduce a
+  dependency on one. If logs reject a valid name while `list_services` works, the
+  bug is in `store.ts`'s file-derived view, not name matching.
 - Commit author: `Shreyans Jain <hi@shreyans.co>`.
 
 ## Testing changes
