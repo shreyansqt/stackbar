@@ -278,10 +278,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // the runtime's VM, so their group RSS isn't representative; show a hint.
         if runner.isLive {
             let memText: String
-            if runner.isContainerBacked {
-                memText = "Memory: — (runs in container)"
-            } else if let mem = runner.memoryDescription {
-                memText = "Memory: \(mem)"
+            if let mem = runner.memoryDescription {
+                memText = runner.isContainerBacked ? "Memory: \(mem) (containers)" : "Memory: \(mem)"
             } else {
                 memText = "Memory: …"
             }

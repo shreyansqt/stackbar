@@ -13,6 +13,10 @@ final class ServiceManager: ObservableObject {
     @Published private(set) var workspaces: [URL] = []
 
     private var healthTimer: Timer?
+    private var dockerTimer: Timer?
+    /// Latest container memory (bytes) keyed by compose project working dir,
+    /// refreshed by `dockerTimer`. Read when sampling container-backed services.
+    private var dockerMemoryByDir: [String: Int] = [:]
     private let workspacesURL: URL
     private var controlServer: ControlServer?
     /// Subscriptions forwarding each runner's status changes up to us, so the menu
@@ -34,6 +38,7 @@ final class ServiceManager: ObservableObject {
         // groups). Without this they accumulate across relaunches/crashes.
         cleanupOrphansFromPreviousRun()
         startHealthTimer()
+        startDockerTimer()
 
         // Local HTTP control channel for the CLI / MCP.
         let server = ControlServer(manager: self)
@@ -304,12 +309,19 @@ final class ServiceManager: ObservableObject {
         }
     }
 
-    /// Sample resident memory for every live service in a single `ps` over all of
-    /// their process groups, then distribute the per-group totals back. Runs off
-    /// the main actor so the `ps` call never blocks the UI.
+    /// Sample memory for every live service. Non-container services get a single
+    /// `ps` over all of their process groups (off the main actor). Container-backed
+    /// services read from the docker cache (refreshed on its own slower timer) by
+    /// matching their `directory` to the compose project's working dir.
     private func sampleMemory() {
-        // (runner, its live group ids) — captured on the main actor before hopping off.
+        // Container-backed services: attribute from the cached docker sample.
+        for runner in runners where runner.isLive && runner.isContainerBacked {
+            runner.setMemoryBytes(containerMemory(for: runner))
+        }
+
+        // Non-container services: (runner, its live group ids), captured here.
         let work = runners.compactMap { r -> (RunningService, [Int32])? in
+            guard !r.isContainerBacked else { return nil }
             let pgids = r.liveProcessGroupIDs
             return pgids.isEmpty ? nil : (r, pgids)
         }
@@ -323,6 +335,39 @@ final class ServiceManager: ObservableObject {
                     runner.setMemoryBytes(bytes > 0 ? bytes : nil)
                 }
             }
+        }
+    }
+
+    /// Cached container memory for a service: sum of every compose project whose
+    /// working dir is at or under the service's directory. nil if nothing matched
+    /// yet (containers still coming up, or docker not sampled).
+    private func containerMemory(for runner: RunningService) -> Int? {
+        let dir = URL(fileURLWithPath: runner.config.directory).standardizedFileURL.path
+        let total = dockerMemoryByDir
+            .filter { $0.key == dir || $0.key.hasPrefix(dir + "/") }
+            .values.reduce(0, +)
+        return total > 0 ? total : nil
+    }
+
+    /// Refresh the docker memory cache on a relaxed cadence. `docker stats
+    /// --no-stream` samples a ~1–2s window, so it runs off the main actor and on a
+    /// slower timer than the health poll. Container memory changes slowly anyway.
+    private func startDockerTimer() {
+        let sample: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            // Skip the docker shell-outs entirely if no service is container-backed.
+            guard self.runners.contains(where: { $0.isLive && $0.isContainerBacked }) else {
+                if !self.dockerMemoryByDir.isEmpty { self.dockerMemoryByDir = [:] }
+                return
+            }
+            Task.detached {
+                let byDir = DockerStats.memoryByWorkingDir()
+                await MainActor.run { self.dockerMemoryByDir = byDir }
+            }
+        }
+        sample()   // prime immediately so the first menu open isn't empty
+        dockerTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            Task { @MainActor in sample() }
         }
     }
 
