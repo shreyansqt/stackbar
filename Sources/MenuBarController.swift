@@ -221,10 +221,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         addItem(to: menu, title: "Add Workspace…", action: #selector(addWorkspace), key: "", symbol: "folder.badge.plus")
         addItem(to: menu, title: "Refresh Services", action: #selector(refresh), key: "", symbol: "arrow.clockwise")
         menu.addItem(.separator())
-        let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        login.target = self
-        login.state = LaunchAtLogin.isEnabled ? .on : .off
-        menu.addItem(login)
+        // Use an image (not the system check state) so the indicator sits in the
+        // same icon gutter as the items above — the state-mark column renders in a
+        // separate, misaligned spot when sibling items carry images.
+        let enabled = LaunchAtLogin.isEnabled
+        addItem(to: menu, title: "Open at Login", action: #selector(toggleLaunchAtLogin), key: "",
+                symbol: enabled ? "checkmark.circle.fill" : "circle")
         addItem(to: menu, title: "Quit StackBar", action: #selector(quit), key: "q", symbol: "power")
     }
 
