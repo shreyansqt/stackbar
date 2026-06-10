@@ -242,7 +242,14 @@ final class RunningService: ObservableObject, Identifiable {
 
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            // EOF: the writers are gone (the child can outlive its stdio, e.g. a
+            // daemonizing dev server). Unregister, or fd-monitoring refires this
+            // handler forever and burns a core per dead pipe.
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+            guard let text = String(data: data, encoding: .utf8) else { return }
             Task { @MainActor in self?.append(text, index: index, prefix: prefix) }
         }
         proc.terminationHandler = { [weak self] p in
@@ -283,7 +290,11 @@ final class RunningService: ObservableObject, Identifiable {
         proc.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            if data.isEmpty {   // EOF — see launchBackground; unregister or it busy-loops
+                handle.readabilityHandler = nil
+                return
+            }
+            guard let text = String(data: data, encoding: .utf8) else { return }
             Task { @MainActor in self?.append(text, index: index, prefix: prefix) }
         }
         do {
@@ -448,7 +459,11 @@ final class RunningService: ObservableObject, Identifiable {
                 proc.standardError = pipe
                 pipe.fileHandleForReading.readabilityHandler = { handle in
                     let data = handle.availableData
-                    guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                    if data.isEmpty {   // EOF — the only cleanup path for background stop cmds
+                        handle.readabilityHandler = nil
+                        return
+                    }
+                    guard let text = String(data: data, encoding: .utf8) else { return }
                     Task { @MainActor in self?.appendStop(text, index: i, prefix: "[stop] ") }
                 }
                 Task { @MainActor in self?.appendStop("[stackbar] stop: \(run)\n", index: i, prefix: "") }
