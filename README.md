@@ -12,6 +12,17 @@ services and read their logs.
 
 By [Shreyans Jain](https://shreyans.co) · hi@shreyans.co
 
+## Install
+
+Download `StackBar-<version>.dmg` from the
+[latest release](https://github.com/shreyansqt/stackbar/releases/latest), open
+it, and drag StackBar to Applications. The app is signed with a Developer ID and
+notarized by Apple, so it launches without a Gatekeeper warning.
+
+Releases are cut by pushing a version tag (`git tag v1.0.0 && git push origin
+v1.0.0`); CI builds, signs, notarizes, and attaches the DMG. To build from
+source instead, see [Build the app](#build-the-app).
+
 ## How it works
 
 1. Each service has a **`.stackbar.json`** in its own folder (the folder is the

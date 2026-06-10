@@ -7,9 +7,13 @@ import { existsSync } from "node:fs";
  * Mirror of the Swift LogStore layout. Single source of truth for where
  * StackBar writes, so the CLI and MCP server stay in sync with the app.
  *
- *   <root>/services.json        registry written by the app
  *   <root>/logs/<id>.log        per-service log (keyed by service UUID)
  *   <root>/logs/<id>.meta.json  { id, name, command, directory }
+ *
+ * The app does not write a single registry file — each service's identity lives
+ * in its own logs/<id>.meta.json. We build the service list from those so name/id
+ * resolution stays in sync with the app without depending on a registry it never
+ * writes (and works even while the app is stopped).
  */
 export const ROOT = join(
   homedir(),
@@ -18,7 +22,6 @@ export const ROOT = join(
   "StackBar"
 );
 export const LOGS_DIR = join(ROOT, "logs");
-const REGISTRY = join(ROOT, "services.json");
 
 export interface Service {
   id: string;
@@ -39,14 +42,38 @@ export interface ServiceMeta {
   lastModified: string | null;
 }
 
-/** Read the service registry the app persists. Empty if the app never ran. */
+/**
+ * Build the service list from the per-service logs/<id>.meta.json files the app
+ * writes. Empty if the app never ran. Malformed/partial meta files are skipped.
+ */
 export async function listServices(): Promise<Service[]> {
-  if (!existsSync(REGISTRY)) return [];
+  if (!existsSync(LOGS_DIR)) return [];
+  let entries: string[];
   try {
-    return JSON.parse(await readFile(REGISTRY, "utf8")) as Service[];
+    entries = await readdir(LOGS_DIR);
   } catch {
     return [];
   }
+  const metas = await Promise.all(
+    entries
+      .filter((f) => f.endsWith(".meta.json"))
+      .map(async (f): Promise<Service | null> => {
+        try {
+          const m = JSON.parse(await readFile(join(LOGS_DIR, f), "utf8")) as Partial<Service>;
+          if (!m.id || !m.name) return null;
+          return {
+            id: m.id,
+            name: m.name,
+            command: m.command ?? "",
+            directory: m.directory ?? "",
+            ...(m.port !== undefined ? { port: m.port } : {}),
+          };
+        } catch {
+          return null;
+        }
+      })
+  );
+  return metas.filter((s): s is Service => s !== null);
 }
 
 /** Enrich each service with the state of its log file on disk. */

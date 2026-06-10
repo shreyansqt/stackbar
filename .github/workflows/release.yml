@@ -1,0 +1,19 @@
+# Tag vX.Y.Z and push it to publish a signed, notarized drag-and-drop DMG to
+# GitHub Releases. The pipeline lives in shreyansqt/release-macos-app; the
+# version comes from the tag (no bump commit needed).
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: shreyansqt/release-macos-app/.github/workflows/release.yml@main
+    with:
+      app-name: StackBar
+      team-id: KVT6M7Q855
+    secrets: inherit

@@ -11,9 +11,11 @@ final class RunningService: ObservableObject, Identifiable {
 
     @Published private(set) var status: ServiceStatus = .idle {
         didSet {
-            // Drop the uptime anchor once the service is no longer up/coming up.
+            // Drop the uptime/memory anchors once the service is no longer up.
             switch status {
-            case .idle, .crashed: startedAt = nil
+            case .idle, .crashed:
+                startedAt = nil
+                memoryBytes = nil
             default: break
             }
         }
@@ -32,6 +34,10 @@ final class RunningService: ObservableObject, Identifiable {
     /// offers a log entry for commands that have been triggered.
     @Published private(set) var startCommandsRan: Set<Int> = []
     @Published private(set) var stopCommandsRan: Set<Int> = []
+
+    /// Resident memory (bytes) of this service's whole process tree, sampled by
+    /// the manager's health timer. nil when not running or not yet sampled.
+    @Published private(set) var memoryBytes: Int?
 
     /// One child process per command in `config.commands`.
     private var processes: [Process] = []
@@ -91,11 +97,74 @@ final class RunningService: ObservableObject, Identifiable {
             var s = "Running"
             if let port = config.port { s += " on port \(port)" }
             if let up = uptimeDescription { s += " · \(up)" }
+            if let mem = memoryDescription { s += " · \(mem)" }
             return s
         }
     }
 
+    /// Compact resident-memory readout (snapshot — NSMenu can't tick live). nil
+    /// when not sampled. "—" is left to the caller; this returns a real figure.
+    var memoryDescription: String? {
+        guard let memoryBytes else { return nil }
+        return Self.formatBytes(memoryBytes)
+    }
+
+    /// Format bytes as a compact MB/GB string (1 decimal for GB, integer MB).
+    static func formatBytes(_ bytes: Int) -> String {
+        let mb = Double(bytes) / 1_048_576
+        if mb < 1024 { return "\(Int(mb.rounded())) MB" }
+        return String(format: "%.1f GB", mb / 1024)
+    }
+
     private var anyRunning: Bool { processes.contains { $0.isRunning } }
+
+    /// Process-group ids of this service's live commands. Each command is its own
+    /// group leader (see `spawn`), so a group covers the command's whole subtree.
+    /// Skips docker-backed services: their real memory lives in the container
+    /// runtime's VM, not in our short-lived `docker compose up` client.
+    var liveProcessGroupIDs: [Int32] {
+        guard !isContainerBacked else { return [] }
+        return processes.filter { $0.isRunning }.map { $0.processIdentifier }
+    }
+
+    /// True if any command shells out to a container runtime — its memory isn't
+    /// in our process tree, so a group-RSS sample would be misleadingly tiny.
+    var isContainerBacked: Bool {
+        config.commandStrings.contains { cmd in
+            let c = cmd.lowercased()
+            return c.contains("docker") || c.contains("orb ") || c.contains("podman")
+        }
+    }
+
+    /// Record a sampled memory figure (called by the manager's health timer).
+    func setMemoryBytes(_ bytes: Int?) {
+        guard isLive else { return }
+        memoryBytes = bytes
+    }
+
+    /// Sum the resident memory (bytes) of every process in the given groups, via a
+    /// single `ps -o rss=,pgid= -g <ids>`. Returns bytes keyed by group id. RSS is
+    /// reported in KB; we convert. Called off the main actor (it blocks on `ps`).
+    nonisolated static func groupRSS(pgids: [Int32]) -> [Int32: Int] {
+        guard !pgids.isEmpty else { return [:] }
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-o", "rss=,pgid=", "-g", pgids.map(String.init).joined(separator: ",")]
+        let pipe = Pipe()
+        ps.standardOutput = pipe
+        ps.standardError = Pipe()
+        guard (try? ps.run()) != nil else { return [:] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+        guard let out = String(data: data, encoding: .utf8) else { return [:] }
+        var totals: [Int32: Int] = [:]
+        for line in out.split(whereSeparator: \.isNewline) {
+            let cols = line.split(whereSeparator: \.isWhitespace)
+            guard cols.count >= 2, let rssKB = Int(cols[0]), let pgid = Int32(cols[1]) else { continue }
+            totals[pgid, default: 0] += rssKB * 1024
+        }
+        return totals
+    }
 
     func start() {
         guard !isLive else { return }
