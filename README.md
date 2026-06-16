@@ -106,6 +106,8 @@ straight from the log files regardless.
 ### CLI (`stackbar`)
 
 ```sh
+stackbar init [--name N] [--cmd C ...] [--stop C ...] [--port P] [--dir D] [--force]
+                                       # scaffold a .stackbar.json in a project
 stackbar list                          # services + live status
 stackbar start|stop|restart <svc|all>  # control a service (or all)
 stackbar rescan                        # re-scan workspaces for .stackbar.json
@@ -114,6 +116,11 @@ stackbar add-workspace <folder>        # track a folder
 stackbar logs <svc> [-n N] [-f] [--cmd N]   # tail logs (--cmd N = one command's log)
 stackbar search <svc> <pattern> [--regex] [--ignore-case]
 ```
+
+`stackbar init` writes a commented `.stackbar.json` in the target folder (default:
+cwd; name defaults to the folder name). It refuses to overwrite an existing file
+without `--force`, and rescans if the app is running. `--cmd` and `--stop` repeat
+for multiple commands.
 
 `<svc>` matches by exact id, exact name, or partial name (case-insensitive).
 `npm link` in `tools/` to put `stackbar` on your PATH.

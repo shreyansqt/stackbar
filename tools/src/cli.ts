@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { api, StackBarNotRunning } from "./client.js";
 import { resolveService, readLogTail, searchLog, LOGS_DIR } from "./store.js";
-import { createReadStream, existsSync, watch, statSync } from "node:fs";
-import { join } from "node:path";
+import { createReadStream, existsSync, watch, statSync, writeFileSync } from "node:fs";
+import { join, resolve, basename } from "node:path";
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -27,6 +27,8 @@ function hasFlag(name: string, short?: string): boolean {
 
 async function main() {
   switch (cmd) {
+    case "init":
+      return cmdInit();
     case "list":
     case "ls":
       return cmdList();
@@ -71,7 +73,7 @@ const DOT: Record<string, string> = {
 async function cmdList() {
   const services = await api.list();
   if (services.length === 0) {
-    console.log("No services configured. Add one: stackbar add <name> --dir <path> --cmd <command>");
+    console.log("No services configured. Scaffold one in a project: stackbar init");
     return;
   }
   for (const s of services) {
@@ -109,6 +111,67 @@ async function cmdAddWorkspace() {
   await api.addWorkspace(path);
   const services = await api.list();
   console.log(`Added workspace. ${services.length} service(s) now discovered.`);
+}
+
+/** Quote a string for embedding in a JSON array literal. */
+function jstr(s: string): string {
+  return JSON.stringify(s);
+}
+
+async function cmdInit() {
+  const dir = resolve(flag("dir", "d") ?? ".");
+  const file = join(dir, ".stackbar.json");
+  if (existsSync(file) && !hasFlag("force", "f")) {
+    console.error(`${file} already exists. Use --force to overwrite.`);
+    process.exit(1);
+  }
+
+  const name = flag("name") ?? basename(dir);
+  const cmds = flagAll("cmd", "c");
+  const stops = flagAll("stop", "s");
+  const port = flag("port", "p");
+
+  // A commented JSONC template — readable and hand-editable, matching the format
+  // the scanner parses (JSONC.swift). Fields: name, commands[], stopCommands[]?, port?.
+  const cmdLines = cmds.length
+    ? cmds.map(jstr).join(", ")
+    : jstr("echo 'replace me: your start command'");
+  const stopLine =
+    stops.length > 0
+      ? `\n\n  // Optional: command(s) run when you Stop the service (e.g. docker teardown).\n  "stopCommands": [${stops.map(jstr).join(", ")}],`
+      : "";
+  const portLine =
+    port !== undefined
+      ? `\n\n  // Optional: TCP port to health-check (green when it's accepting connections).\n  "port": ${parseInt(port, 10)},`
+      : `\n\n  // Optional: TCP port to health-check (green when it's accepting connections).\n  // "port": 3000,`;
+
+  const content = `{
+  // StackBar service config. This file is read by the StackBar menu-bar app.
+  // Lives in this folder; the folder IS the service's working directory.
+
+  // Name shown in the StackBar menu.
+  "name": ${jstr(name)},
+
+  // Command(s) to start the service, run in order, each in its own process.
+  "commands": [${cmdLines}],${stopLine}${portLine}
+}
+`;
+
+  writeFileSync(file, content);
+  console.log(`Wrote ${file}`);
+  if (!cmds.length) {
+    console.log("Edit the placeholder \"commands\" entry, then run: stackbar rescan");
+  }
+
+  // If the app is running and this folder is under a tracked workspace, the new
+  // service will appear after a rescan. Trigger it best-effort; ignore if the app
+  // is down or the folder isn't in a workspace (init is a local-file action either way).
+  try {
+    await api.rescan();
+    console.log("Rescanned StackBar.");
+  } catch {
+    // app not running — fine, the file is written; rescan later.
+  }
 }
 
 async function cmdAction(action: "start" | "stop" | "restart") {
@@ -191,6 +254,11 @@ function usage() {
   console.log(`stackbar — control and inspect StackBar services
 
 Services come from .stackbar.json files in your workspace folders.
+
+Setup:
+  stackbar init [--name N] [--cmd C ...] [--stop C ...] [--port P] [--dir D] [--force]
+                                                   Scaffold a .stackbar.json in a project
+                                                   (defaults: name = folder name, cwd)
 
 Services:
   stackbar list                                    List services + live status

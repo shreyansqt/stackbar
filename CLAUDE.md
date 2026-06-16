@@ -65,7 +65,9 @@ CLI + MCP server. Read this before working in the repo.
 
 - **Config is files, not in-app.** Services come from repo `.stackbar.json` files
   discovered by scanning workspace folders. There is no add/edit/remove-service UI
-  or API anymore — only workspace add/remove + rescan.
+  or API anymore — only workspace add/remove + rescan. The CLI's `stackbar init`
+  scaffolds a `.stackbar.json` (it writes the file directly, then rescans); it is
+  not a service-registration API.
 - **`@MainActor`**: `ServiceManager`/`RunningService`/`MenuBarController` are main-
   actor. Shell-scanning helpers used off the main thread (orphan cleanup,
   `killProcessOnPort`, `processName`) are `nonisolated` — keep them so.
