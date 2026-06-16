@@ -17,10 +17,12 @@ targets:
       # Bundle the MCP server into Contents/Resources/mcp/mcp.js so the DMG ships
       # it inside the app. Colleagues register it with `claude mcp add` pointing at
       # the in-app path — no repo clone / npm install needed. See Scripts/bundle-mcp.sh.
+      # alwaysOutOfDate: the bundle depends on tools/src/*.ts, which Xcode doesn't
+      # track — without this the phase is cached and ships a stale mcp.js when only
+      # the TS sources change.
       - script: '"$SRCROOT/Scripts/bundle-mcp.sh"'
         name: Bundle MCP server
-        outputFiles:
-          - "$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Resources/mcp/mcp.js"
+        basedOnDependencyAnalysis: false
     info:
       path: Sources/Info.plist
       properties:

@@ -89,4 +89,5 @@ export const api = {
   workspaces: (): Promise<string[]> =>
     call("GET", "/workspaces").then((r) => r.workspaces as string[]),
   addWorkspace: (path: string) => call("POST", "/workspaces", { path }),
+  removeWorkspace: (path: string) => call("DELETE", "/workspaces", { path }),
 };

@@ -100,6 +100,13 @@ final class ControlServer {
                 manager.addWorkspace(URL(fileURLWithPath: path))
                 return .json(["ok": true, "services": manager.statusSnapshot()])
             }
+            if m == "DELETE" {
+                guard let body = req.jsonBody, let path = body["path"] as? String else {
+                    return .json(["error": "path required"], status: 400)
+                }
+                manager.removeWorkspace(URL(fileURLWithPath: path))
+                return .json(["ok": true, "services": manager.statusSnapshot()])
+            }
         }
 
         // Service actions: /services/<idOrName>/<action>

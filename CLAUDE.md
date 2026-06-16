@@ -55,8 +55,9 @@ CLI + MCP server. Read this before working in the repo.
   and the sectioned service submenu.
 - `ControlServer.swift` + `HTTP.swift` — localhost-only token-authed HTTP server
   (Network.framework, minimal hand-rolled HTTP). Endpoints: GET `/services`,
-  POST `/rescan`, GET/POST `/workspaces`, POST `/services/<id>/{start,stop,restart}`,
-  `/start-all`, `/stop-all`.
+  POST `/rescan`, GET/POST/DELETE `/workspaces` (POST adds, DELETE removes — both
+  take `{path}`), POST `/services/<id>/{start,stop,restart}`, `/start-all`,
+  `/stop-all`.
 - `LogStore.swift` / `LogTextView.swift` / `LogWindowView.swift` — on-disk log
   files + the native `NSTextView` console (ANSI color, line numbers).
 - `Log.swift` — StackBar's own diagnostic log (`stackbar.log`).

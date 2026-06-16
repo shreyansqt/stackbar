@@ -2,8 +2,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { resolve } from "node:path";
 import { api, StackBarNotRunning } from "./client.js";
 import { resolveService, readLogTail, searchLog } from "./store.js";
+import { writeConfig } from "./scaffold.js";
 
 const server = new McpServer({ name: "stackbar", version: "1.0.0" });
 
@@ -101,6 +103,54 @@ server.tool(
     const services = await api.list();
     return text(`Added workspace ${path}. ${services.length} service(s) now discovered.`);
   })
+);
+
+server.tool(
+  "remove_workspace",
+  "Stop tracking a workspace folder. Its services are removed from StackBar (the folder and its .stackbar.json files are left on disk).",
+  { path: z.string().describe("Absolute path of a tracked workspace folder") },
+  ({ path }) => withApp(async () => {
+    const target = resolve(path);
+    const tracked = await api.workspaces();
+    if (!tracked.some((w) => resolve(w) === target)) {
+      return text(
+        `Not a tracked workspace: ${target}\nTracked: ${tracked.join(", ") || "(none)"}`,
+        true
+      );
+    }
+    await api.removeWorkspace(target);
+    const services = await api.list();
+    return text(`Removed workspace ${target}. ${services.length} service(s) now discovered.`);
+  })
+);
+
+server.tool(
+  "init_service",
+  "Scaffold a .stackbar.json file in a project folder so StackBar can run it. Writes a commented config (name defaults to the folder name). Refuses to overwrite unless force is set. Rescans afterward so the service appears if the folder is under a tracked workspace.",
+  {
+    dir: z.string().describe("Absolute path to the project folder the config is written into"),
+    name: z.string().optional().describe("Service name shown in the menu (default: folder name)"),
+    commands: z.array(z.string()).optional().describe("Start command(s), run in order, each in its own process"),
+    stopCommands: z.array(z.string()).optional().describe("Command(s) run on Stop, e.g. docker teardown"),
+    port: z.number().int().positive().optional().describe("TCP port to health-check"),
+    force: z.boolean().optional().describe("Overwrite an existing .stackbar.json"),
+  },
+  async ({ dir, name, commands, stopCommands, port, force }) => {
+    // Writing the file does NOT need the app — only the rescan does (best-effort).
+    let result;
+    try {
+      result = writeConfig({ dir, name, commands, stopCommands, port, force });
+    } catch (e) {
+      return text((e as Error).message, true);
+    }
+    let rescanned = true;
+    try { await api.rescan(); } catch { rescanned = false; /* app down — file is still written */ }
+    const hint = result.placeholder
+      ? " Edit the placeholder \"commands\" entry, then rescan."
+      : "";
+    const note = rescanned ? "" : " (StackBar isn't running — rescan when it's up.)";
+    return text(`Wrote ${result.file} (service "${result.name}").${hint}${note}`);
+  }
 );
 
 // ---- Logs (read directly from files; work even if the app is stopped) ----

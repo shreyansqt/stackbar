@@ -113,6 +113,7 @@ stackbar start|stop|restart <svc|all>  # control a service (or all)
 stackbar rescan                        # re-scan workspaces for .stackbar.json
 stackbar workspaces                    # list workspace folders
 stackbar add-workspace <folder>        # track a folder
+stackbar remove-workspace <folder>     # stop tracking a folder
 stackbar logs <svc> [-n N] [-f] [--cmd N]   # tail logs (--cmd N = one command's log)
 stackbar search <svc> <pattern> [--regex] [--ignore-case]
 ```
@@ -138,7 +139,8 @@ claude mcp add stackbar --scope user -- \
 ```
 
 Tools: `list_services`, `start_service`, `stop_service`, `restart_service`,
-`rescan_services`, `list_workspaces`, `add_workspace`, `get_logs`, `search_logs`.
+`rescan_services`, `init_service`, `list_workspaces`, `add_workspace`,
+`remove_workspace`, `get_logs`, `search_logs`.
 
 If you're working from a clone instead, point it at your build output:
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { api, StackBarNotRunning } from "./client.js";
 import { resolveService, readLogTail, searchLog, LOGS_DIR } from "./store.js";
-import { createReadStream, existsSync, watch, statSync, writeFileSync } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import { createReadStream, existsSync, watch, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { writeConfig } from "./scaffold.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -39,6 +40,9 @@ async function main() {
       return cmdWorkspaces();
     case "add-workspace":
       return cmdAddWorkspace();
+    case "remove-workspace":
+    case "rm-workspace":
+      return cmdRemoveWorkspace();
     case "start":
       return cmdAction("start");
     case "stop":
@@ -113,53 +117,42 @@ async function cmdAddWorkspace() {
   console.log(`Added workspace. ${services.length} service(s) now discovered.`);
 }
 
-/** Quote a string for embedding in a JSON array literal. */
-function jstr(s: string): string {
-  return JSON.stringify(s);
+async function cmdRemoveWorkspace() {
+  const path = args[1];
+  if (!path) {
+    console.error("usage: stackbar remove-workspace <folder>");
+    process.exit(1);
+  }
+  const target = resolve(path);
+  const tracked = await api.workspaces();
+  if (!tracked.some((w) => resolve(w) === target)) {
+    console.error(`Not a tracked workspace: ${target}`);
+    console.error(tracked.length ? `Tracked:\n  ${tracked.join("\n  ")}` : "(no workspaces tracked)");
+    process.exit(1);
+  }
+  await api.removeWorkspace(target);
+  const services = await api.list();
+  console.log(`Removed workspace. ${services.length} service(s) now discovered.`);
 }
 
 async function cmdInit() {
-  const dir = resolve(flag("dir", "d") ?? ".");
-  const file = join(dir, ".stackbar.json");
-  if (existsSync(file) && !hasFlag("force", "f")) {
-    console.error(`${file} already exists. Use --force to overwrite.`);
+  const portStr = flag("port", "p");
+  let result;
+  try {
+    result = writeConfig({
+      dir: flag("dir", "d"),
+      name: flag("name"),
+      commands: flagAll("cmd", "c"),
+      stopCommands: flagAll("stop", "s"),
+      port: portStr !== undefined ? parseInt(portStr, 10) : undefined,
+      force: hasFlag("force", "f"),
+    });
+  } catch (e) {
+    console.error((e as Error).message);
     process.exit(1);
   }
-
-  const name = flag("name") ?? basename(dir);
-  const cmds = flagAll("cmd", "c");
-  const stops = flagAll("stop", "s");
-  const port = flag("port", "p");
-
-  // A commented JSONC template — readable and hand-editable, matching the format
-  // the scanner parses (JSONC.swift). Fields: name, commands[], stopCommands[]?, port?.
-  const cmdLines = cmds.length
-    ? cmds.map(jstr).join(", ")
-    : jstr("echo 'replace me: your start command'");
-  const stopLine =
-    stops.length > 0
-      ? `\n\n  // Optional: command(s) run when you Stop the service (e.g. docker teardown).\n  "stopCommands": [${stops.map(jstr).join(", ")}],`
-      : "";
-  const portLine =
-    port !== undefined
-      ? `\n\n  // Optional: TCP port to health-check (green when it's accepting connections).\n  "port": ${parseInt(port, 10)},`
-      : `\n\n  // Optional: TCP port to health-check (green when it's accepting connections).\n  // "port": 3000,`;
-
-  const content = `{
-  // StackBar service config. This file is read by the StackBar menu-bar app.
-  // Lives in this folder; the folder IS the service's working directory.
-
-  // Name shown in the StackBar menu.
-  "name": ${jstr(name)},
-
-  // Command(s) to start the service, run in order, each in its own process.
-  "commands": [${cmdLines}],${stopLine}${portLine}
-}
-`;
-
-  writeFileSync(file, content);
-  console.log(`Wrote ${file}`);
-  if (!cmds.length) {
+  console.log(`Wrote ${result.file}`);
+  if (result.placeholder) {
     console.log("Edit the placeholder \"commands\" entry, then run: stackbar rescan");
   }
 
@@ -265,6 +258,7 @@ Services:
   stackbar rescan                                  Re-scan workspaces for .stackbar.json
   stackbar workspaces                              List workspace folders
   stackbar add-workspace <folder>                  Track a folder (scanned for services)
+  stackbar remove-workspace <folder>               Stop tracking a folder
 
 Actions:
   stackbar start   <service|all>                   Start
