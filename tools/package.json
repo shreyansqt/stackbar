@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "bundle:mcp": "esbuild src/mcp.ts --bundle --platform=node --format=esm --packages=bundle --outfile=dist/mcp.bundle.js",
     "dev:cli": "tsx src/cli.ts",
     "dev:mcp": "tsx src/mcp.ts"
   },
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "esbuild": "^0.28.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },

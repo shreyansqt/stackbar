@@ -20,6 +20,14 @@ CLI + MCP server. Read this before working in the repo.
 - TS tools: `cd tools && npm install && npm run build` (outputs to `tools/dist/`,
   gitignored). The MCP server registered with `claude mcp` points at
   `tools/dist/mcp.js`, so rebuild after editing `tools/src/`.
+- **The MCP server is also bundled into the app** for distribution. The
+  `Bundle MCP server` post-build phase (`Scripts/bundle-mcp.sh`) runs
+  `npm run bundle:mcp` (esbuild → one self-contained `tools/dist/mcp.bundle.js`,
+  deps inlined) and copies it to `StackBar.app/Contents/Resources/mcp/mcp.js`. So
+  the DMG ships with MCP inside; colleagues register it via
+  `claude mcp add stackbar -- node /Applications/StackBar.app/Contents/Resources/mcp/mcp.js`
+  (no clone/build). The bundled file has no cwd assumptions — `client.ts`/`store.ts`
+  resolve everything under `~/Library/Application Support/StackBar`.
 - SourceKit in-editor diagnostics often show false "Cannot find type" errors
   (single-file analysis can't see the whole module). **Trust the xcodebuild
   result**, not those.

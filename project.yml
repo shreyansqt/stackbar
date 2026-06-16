@@ -13,6 +13,14 @@ targets:
     platform: macOS
     sources:
       - path: Sources
+    postBuildScripts:
+      # Bundle the MCP server into Contents/Resources/mcp/mcp.js so the DMG ships
+      # it inside the app. Colleagues register it with `claude mcp add` pointing at
+      # the in-app path — no repo clone / npm install needed. See Scripts/bundle-mcp.sh.
+      - script: '"$SRCROOT/Scripts/bundle-mcp.sh"'
+        name: Bundle MCP server
+        outputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Resources/mcp/mcp.js"
     info:
       path: Sources/Info.plist
       properties:

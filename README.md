@@ -120,17 +120,28 @@ stackbar search <svc> <pattern> [--regex] [--ignore-case]
 
 ### MCP server
 
-Register once at user scope so every Claude Code session can use it:
+The MCP server ships **inside the app bundle** (a self-contained file at
+`Contents/Resources/mcp/mcp.js`), so if you installed the DMG you don't need to
+clone the repo or build anything — just register it once at user scope (requires
+Node on your PATH):
 
 ```sh
-claude mcp add stackbar --scope user -- node /absolute/path/to/tools/dist/mcp.js
+claude mcp add stackbar --scope user -- \
+  node /Applications/StackBar.app/Contents/Resources/mcp/mcp.js
 ```
 
 Tools: `list_services`, `start_service`, `stop_service`, `restart_service`,
 `rescan_services`, `list_workspaces`, `add_workspace`, `get_logs`, `search_logs`.
 
+If you're working from a clone instead, point it at your build output:
+
+```sh
+claude mcp add stackbar --scope user -- node /absolute/path/to/tools/dist/mcp.js
+```
+
 > Note: `tools/dist/` is gitignored. After cloning, run `npm install && npm run build`
-> in `tools/` before the CLI or MCP server will work.
+> in `tools/` before the CLI or MCP server will work. The in-app bundle is produced
+> by the `Bundle MCP server` build phase (`Scripts/bundle-mcp.sh`) on every app build.
 
 ## Notable behaviors
 
