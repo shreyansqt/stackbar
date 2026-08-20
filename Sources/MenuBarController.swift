@@ -19,6 +19,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
+        statusItem.button?.imagePosition = .imageOnly
+
         let menu = NSMenu()
         menu.delegate = self            // rebuild items just before each open
         statusItem.menu = menu
@@ -57,6 +59,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var spinnerAngle: CGFloat = 0
     private var lastState: ServiceManager.IconState?
     private var checkmarkTimer: Timer?
+    private struct SymbolKey: Hashable {
+        let name: String
+        let alpha: CGFloat
+        let yOffset: CGFloat
+    }
+    private var symbolCache: [SymbolKey: NSImage] = [:]
+    private var displayedSymbol: SymbolKey?
 
     private func updateIcon() {
         guard let button = statusItem.button else { return }
@@ -74,13 +83,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // When we *transition into* all-running, flash a checkmark briefly before
         // settling to the solid glyph — a small "everything's up" confirmation.
         if state == .allRunning, lastState != nil, lastState != .allRunning {
-            setImage(symbol("checkmark.rectangle.stack.fill"), on: button)
+            setSymbol("checkmark.rectangle.stack.fill", on: button)
             cancelCheckmark()
             let timer = Timer(timeInterval: 2.0, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let button = self.statusItem.button else { return }
                     if self.manager.iconState == .allRunning {
-                        self.setImage(self.symbol("rectangle.stack.fill"), on: button)
+                        self.setSymbol("rectangle.stack.fill", on: button)
                     }
                 }
             }
@@ -93,25 +102,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // fire during all-running). Let the checkmark timer settle the glyph.
         if state == .allRunning, checkmarkTimer != nil { return }
 
-        let image: NSImage?
         switch state {
         case .crashed:
-            image = symbol("exclamationmark.triangle.fill")
+            setSymbol("exclamationmark.triangle.fill", on: button)
         case .allRunning, .idle:
             // Brightness reflects how many services are running: 40% (none) → 100%
             // (all). allRunning is just the 100% end of this same scale.
             let alpha = 0.4 + 0.6 * manager.runningFraction
-            image = symbol("rectangle.stack.fill", alpha: alpha)
+            setSymbol("rectangle.stack.fill", alpha: alpha, on: button)
         case .booting:
-            image = nil // handled above
+            break // handled above
         }
-        setImage(image, on: button)
     }
 
-    private func setImage(_ image: NSImage?, on button: NSStatusBarButton) {
-        image?.isTemplate = true
+    private func setSymbol(_ name: String, alpha: CGFloat = 1, yOffset: CGFloat = 0,
+                           on button: NSStatusBarButton) {
+        let key = SymbolKey(name: name, alpha: alpha, yOffset: yOffset)
+        guard displayedSymbol != key else { return }
+        guard let image = symbol(name, alpha: alpha, yOffset: yOffset) else { return }
         button.image = image
-        button.imagePosition = .imageOnly
+        displayedSymbol = key
     }
 
     private func cancelCheckmark() {
@@ -123,10 +133,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// and nudged vertically (points; negative = down) for optical alignment. Stays
     /// a template so macOS tints it to the bar color.
     private func symbol(_ name: String, alpha: CGFloat = 1, yOffset: CGFloat = 0) -> NSImage? {
+        let key = SymbolKey(name: name, alpha: alpha, yOffset: yOffset)
+        if let cached = symbolCache[key] { return cached }
+
         let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         guard let base = NSImage(systemSymbolName: name, accessibilityDescription: "StackBar")?
             .withSymbolConfiguration(config) else { return nil }
-        guard alpha < 1 || yOffset != 0 else { return base }
+        base.isTemplate = true
+        guard alpha < 1 || yOffset != 0 else {
+            symbolCache[key] = base
+            return base
+        }
 
         // Pad the canvas by |yOffset| so the shift doesn't clip the glyph.
         let pad = abs(yOffset)
@@ -137,6 +154,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                   from: .zero, operation: .sourceOver, fraction: alpha)
         image.unlockFocus()
         image.isTemplate = true
+        symbolCache[key] = image
         return image
     }
 
@@ -175,7 +193,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         image.unlockFocus()
         image.isTemplate = true
         button.image = image
-        button.imagePosition = .imageOnly
+        displayedSymbol = nil
     }
 
     // MARK: - NSMenuDelegate (build fresh each time it opens)
@@ -556,4 +574,3 @@ final class LogTarget: NSObject {
         self.commandIndex = commandIndex
     }
 }
-

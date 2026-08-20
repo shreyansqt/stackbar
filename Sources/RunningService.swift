@@ -139,7 +139,16 @@ final class RunningService: ObservableObject, Identifiable {
     /// Record a sampled memory figure (called by the manager's health timer).
     func setMemoryBytes(_ bytes: Int?) {
         guard isLive else { return }
+        guard Self.shouldPublishMemorySample(previous: memoryBytes, next: bytes) else { return }
         memoryBytes = bytes
+    }
+
+    /// Ignore memory noise below 1 MiB. The menu rounds memory for display, and
+    /// publishing each small RSS change needlessly redraws observers.
+    private static func shouldPublishMemorySample(previous: Int?, next: Int?) -> Bool {
+        guard previous != next else { return false }
+        guard let previous, let next else { return true }
+        return abs(next - previous) >= 1_048_576
     }
 
     /// Sum the resident memory (bytes) of every process in the given groups, via a
@@ -534,15 +543,27 @@ final class RunningService: ObservableObject, Identifiable {
     /// Called periodically by the manager to refresh port-based status.
     func refreshHealth() {
         guard anyRunning else { return }
-        guard let port = config.port else {
-            status = .running // no port configured: any process alive == running
-            return
+        let portIsOpen = config.port.map { PortProbe.isOpen(port: $0) }
+        refreshHealth(processIsRunning: true, portIsOpen: portIsOpen)
+    }
+
+    /// Apply one health-check result. Parameters keep the publication behavior
+    /// testable without starting a real child process or opening a real port.
+    func refreshHealth(processIsRunning: Bool, portIsOpen: Bool?) {
+        guard processIsRunning else { return }
+        let nextStatus: ServiceStatus = config.port == nil || portIsOpen == true ? .running : .starting
+        if status != nextStatus {
+            status = nextStatus
         }
-        status = PortProbe.isOpen(port: port) ? .running : .starting
+
         // Reflect health onto still-live commands (leave crashed ones as crashed).
+        var nextCommandStates = commandStates
         for i in commandStates.indices {
             if case .crashed = commandStates[i] { continue }
-            commandStates[i] = status
+            nextCommandStates[i] = nextStatus
+        }
+        if commandStates != nextCommandStates {
+            commandStates = nextCommandStates
         }
     }
 

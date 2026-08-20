@@ -42,3 +42,13 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
         GENERATE_INFOPLIST_FILE: NO
+  StackBarTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: StackBar
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES

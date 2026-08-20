@@ -196,7 +196,7 @@ final class ServiceManager: ObservableObject {
     /// (the menu bar controller) update on per-service status changes too.
     private func observeRunners() {
         runnerObservations = runners.map { runner in
-            runner.objectWillChange.sink { [weak self] in
+            runner.$status.dropFirst().removeDuplicates().sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
         }
